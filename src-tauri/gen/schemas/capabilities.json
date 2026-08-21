@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default ChatPet window permissions","local":true,"windows":["pet","settings","todos"],"permissions":["core:default","core:window:allow-start-dragging"]}}

@@ -1,0 +1,563 @@
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use std::io::BufReader as StdBufReader;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::Mutex;
+
+use crate::db::{AppSettings, DbState, Message};
+use crate::ModelConfig;
+
+pub struct VoiceOutputState {
+    pipeline: Mutex<()>,
+    runtime: Mutex<VitsRuntime>,
+}
+
+impl VoiceOutputState {
+    pub fn new(data_dir: &Path) -> Self {
+        Self {
+            pipeline: Mutex::new(()),
+            runtime: Mutex::new(VitsRuntime::new(data_dir)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VitsModelInfo {
+    pub name: String,
+    pub path: String,
+    pub language: Option<String>,
+    pub speakers: Vec<String>,
+    pub has_config: bool,
+}
+
+#[derive(Serialize)]
+struct VitsRequest {
+    action: String,
+    text: Option<String>,
+    model_path: Option<String>,
+    speaker_id: Option<String>,
+    emotion_params: Option<String>,
+    speed: Option<f64>,
+    target_language: Option<String>,
+    output_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct VitsResponse {
+    success: bool,
+    message: Option<String>,
+    output_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct VitsReady {
+    ready: bool,
+}
+
+struct VitsRuntime {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    stdout: Option<BufReader<ChildStdout>>,
+    exe: PathBuf,
+}
+
+impl VitsRuntime {
+    fn new(data_dir: &Path) -> Self {
+        Self {
+            child: None,
+            stdin: None,
+            stdout: None,
+            exe: data_dir.join("vits_runtime").join("vits_runtime.exe"),
+        }
+    }
+    async fn start(&mut self) -> Result<(), String> {
+        if self.child.is_some() {
+            return Ok(());
+        }
+        if !self.exe.exists() {
+            return Err(format!("未找到 VITS Runtime：{}", self.exe.display()));
+        }
+        let mut command = Command::new(&self.exe);
+        command
+            .current_dir(self.exe.parent().unwrap())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .env("PYTHONIOENCODING", "utf-8");
+        #[cfg(windows)]
+        command.creation_flags(0x08000000);
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("启动 VITS 失败：{e}"))?;
+        self.stdin = child.stdin.take();
+        self.stdout = child.stdout.take().map(BufReader::new);
+        self.child = Some(child);
+        let mut line = String::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            self.stdout
+                .as_mut()
+                .ok_or("VITS stdout 不可用")?
+                .read_line(&mut line),
+        )
+        .await
+        .map_err(|_| "等待 VITS 就绪超时".to_string())?
+        .map_err(|e| e.to_string())?;
+        if read == 0
+            || !serde_json::from_str::<VitsReady>(line.trim())
+                .map_err(|e| format!("VITS 就绪响应无效：{e}"))?
+                .ready
+        {
+            self.stop();
+            return Err("VITS Runtime 未就绪".into());
+        }
+        Ok(())
+    }
+    async fn generate(&mut self, request: &VitsRequest) -> Result<PathBuf, String> {
+        self.start().await?;
+        let json = serde_json::to_string(request).map_err(|e| e.to_string())?;
+        let stdin = self.stdin.as_mut().ok_or("VITS stdin 不可用")?;
+        stdin
+            .write_all(json.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
+        stdin.flush().await.map_err(|e| e.to_string())?;
+        let mut line = String::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            self.stdout
+                .as_mut()
+                .ok_or("VITS stdout 不可用")?
+                .read_line(&mut line),
+        )
+        .await
+        .map_err(|_| "VITS 合成超时".to_string())?
+        .map_err(|e| e.to_string())?;
+        if read == 0 {
+            self.stop();
+            return Err("VITS Runtime 意外退出".into());
+        }
+        let response: VitsResponse =
+            serde_json::from_str(line.trim()).map_err(|e| format!("VITS 响应无效：{e}"))?;
+        if !response.success {
+            return Err(response.message.unwrap_or_else(|| "VITS 合成失败".into()));
+        }
+        response
+            .output_path
+            .map(PathBuf::from)
+            .or_else(|| request.output_path.as_ref().map(PathBuf::from))
+            .ok_or("VITS 未返回音频路径".into())
+    }
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+        }
+        self.stdin = None;
+        self.stdout = None;
+    }
+}
+
+impl Drop for VitsRuntime {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub fn scan_models(data_dir: &Path) -> Result<Vec<VitsModelInfo>, String> {
+    let root = data_dir.join("vits_models");
+    if !root.exists() {
+        return Ok(vec![]);
+    }
+    let mut result = Vec::new();
+    for entry in std::fs::read_dir(root)
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let files: Vec<_> = std::fs::read_dir(&path)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .collect();
+        if !files
+            .iter()
+            .any(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pth")))
+        {
+            continue;
+        }
+        let config = if path.join("config.json").exists() {
+            Some(path.join("config.json"))
+        } else {
+            files
+                .iter()
+                .find(|p| {
+                    p.extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                })
+                .cloned()
+        };
+        let mut language = None;
+        let mut speakers = Vec::new();
+        if let Some(config) = &config {
+            if let Ok(value) = std::fs::read_to_string(config)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .ok_or(())
+            {
+                language = value
+                    .pointer("/data/language")
+                    .or_else(|| value.pointer("/model/language"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                if let Some(items) = value.get("speakers").and_then(|v| v.as_array()) {
+                    speakers = items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect();
+                } else if let Some(items) = value.get("speakers").and_then(|v| v.as_object()) {
+                    let mut pairs: Vec<_> = items
+                        .iter()
+                        .filter_map(|(k, v)| v.as_i64().map(|id| (id, k.clone())))
+                        .collect();
+                    pairs.sort_by_key(|p| p.0);
+                    speakers = pairs.into_iter().map(|p| p.1).collect();
+                }
+            }
+        }
+        result.push(VitsModelInfo {
+            name: entry.file_name().to_string_lossy().into(),
+            path: path.to_string_lossy().into(),
+            language,
+            speakers,
+            has_config: config.is_some(),
+        });
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
+}
+
+pub fn schedule(app: AppHandle, message: Message) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = generate_and_play(&app, &message).await {
+            eprintln!("voice output failed: {error}");
+            let _ = app.emit("voice-output-error", error);
+        }
+    });
+}
+
+pub async fn test(app: &AppHandle) -> Result<(), String> {
+    let message = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: "assistant".into(),
+        content: "你好，我是你的桌面伙伴。".into(),
+        trigger_type: "voice_test".into(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+    };
+    generate_and_play(app, &message).await
+}
+
+async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), String> {
+    let state = app.state::<VoiceOutputState>();
+    let _guard = state.pipeline.lock().await;
+    let db = app.state::<DbState>();
+    let mut settings = {
+        let conn = db.0.lock().await;
+        crate::db::get_settings(&conn, true).map_err(|e| e.to_string())?
+    };
+    if settings.tts_api_key.is_empty() {
+        settings.tts_api_key = app
+            .state::<crate::MemoryEnvConfig>()
+            .embedding_api_key
+            .clone();
+    }
+    if settings.voice_output_mode == "disabled" {
+        return Ok(());
+    }
+    let cache = crate::data_dir().join("voice_cache");
+    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let path = if settings.voice_output_mode == "api" {
+        api_tts(&settings, &message.content, &cache.join(&message.id)).await?
+    } else if settings.voice_output_mode == "vits" {
+        if !crate::data_dir()
+            .join("vits_runtime")
+            .join("vits_runtime.exe")
+            .exists()
+        {
+            return Ok(());
+        }
+        if settings.vits_model_path.is_empty() {
+            return Err("尚未选择 VITS 模型".into());
+        }
+        let text = if settings.vits_translate_enabled {
+            translate(app, &settings, &message.content).await?
+        } else {
+            message.content.clone()
+        };
+        let output = cache.join(format!("{}.wav", message.id));
+        let request = VitsRequest {
+            action: "generate".into(),
+            text: Some(text),
+            model_path: Some(settings.vits_model_path.clone()),
+            speaker_id: settings.vits_speaker_id.clone(),
+            emotion_params: (!settings.vits_emotion_params.is_empty())
+                .then_some(settings.vits_emotion_params.clone()),
+            speed: Some(settings.vits_speed),
+            target_language: Some(settings.vits_target_language.clone()),
+            output_path: Some(output.to_string_lossy().into()),
+        };
+        state.runtime.lock().await.generate(&request).await?
+    } else {
+        return Ok(());
+    };
+    play(path).await
+}
+
+async fn api_tts(settings: &AppSettings, text: &str, output: &Path) -> Result<PathBuf, String> {
+    if settings.tts_api_base_url.is_empty()
+        || settings.tts_api_model.is_empty()
+        || settings.tts_api_key.is_empty()
+    {
+        return Err("通用 TTS API 配置不完整".into());
+    }
+    let client = reqwest::Client::new();
+    let (mut bytes, content_type) = if settings.tts_api_protocol == "openai" {
+        let response = client.post(format!("{}/audio/speech", settings.tts_api_base_url)).bearer_auth(&settings.tts_api_key).json(&serde_json::json!({"model":settings.tts_api_model,"input":text,"voice":settings.tts_api_voice,"response_format":"wav"})).send().await.map_err(|e| format!("TTS 请求失败：{e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "TTS 返回 {status}: {}",
+                body.chars().take(240).collect::<String>()
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        (
+            response.bytes().await.map_err(|e| e.to_string())?.to_vec(),
+            content_type,
+        )
+    } else {
+        let response = client.post(format!("{}/services/aigc/multimodal-generation/generation", settings.tts_api_base_url)).bearer_auth(&settings.tts_api_key).json(&serde_json::json!({"model":settings.tts_api_model,"input":{"text":text,"voice":settings.tts_api_voice,"language_type":settings.tts_api_language}})).send().await.map_err(|e| format!("千问 TTS 请求失败：{e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "千问 TTS 返回 {status}: {}",
+                body.chars().take(240).collect::<String>()
+            ));
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("千问 TTS 响应解析失败：{e}"))?;
+        if let Some(data) = value
+            .pointer("/output/audio/data")
+            .and_then(|v| v.as_str())
+            .filter(|data| !data.trim().is_empty())
+        {
+            (
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| format!("音频 Base64 无效：{e}"))?,
+                "audio/wav".to_string(),
+            )
+        } else if let Some(url) = value.pointer("/output/audio/url").and_then(|v| v.as_str()) {
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .error_for_status()
+                .map_err(|e| e.to_string())?;
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            (
+                response.bytes().await.map_err(|e| e.to_string())?.to_vec(),
+                content_type,
+            )
+        } else {
+            return Err(format!(
+                "千问 TTS 未返回音频：{}",
+                value
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("未知响应")
+            ));
+        }
+    };
+    if bytes.is_empty() {
+        return Err("TTS 返回了空音频，未写入缓存".into());
+    }
+    normalize_streaming_wav_header(&mut bytes)?;
+    let extension = detect_audio_extension(&bytes, &content_type).ok_or_else(|| {
+        let header = bytes
+            .iter()
+            .take(12)
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("TTS 返回的内容不是受支持的音频（Content-Type: {content_type}，文件头: {header}）")
+    })?;
+    let output = output.with_extension(extension);
+    if let Err(error) = std::fs::write(&output, &bytes) {
+        let _ = std::fs::remove_file(&output);
+        return Err(error.to_string());
+    }
+    Ok(output)
+}
+
+fn detect_audio_extension(bytes: &[u8], content_type: &str) -> Option<&'static str> {
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
+        Some("wav")
+    } else if bytes.starts_with(b"ID3")
+        || matches!(bytes.get(0..2), Some([0xFF, second]) if second & 0xE0 == 0xE0)
+    {
+        Some("mp3")
+    } else if bytes.starts_with(b"OggS") {
+        Some("ogg")
+    } else if bytes.starts_with(b"fLaC") {
+        Some("flac")
+    } else if content_type.contains("wav") || content_type.contains("wave") {
+        Some("wav")
+    } else if content_type.contains("mpeg") || content_type.contains("mp3") {
+        Some("mp3")
+    } else if content_type.contains("ogg") {
+        Some("ogg")
+    } else if content_type.contains("flac") {
+        Some("flac")
+    } else {
+        None
+    }
+}
+
+/// 部分云 TTS 为便于流式传输，会把 RIFF/data 长度写成 0x7fffffff。
+/// 保存为普通文件后必须改成真实长度，否则严格的 WAV 解码器会在文件末尾
+/// 报 `end of stream`，即使 PCM 数据本身完整。
+fn normalize_streaming_wav_header(bytes: &mut [u8]) -> Result<(), String> {
+    if bytes.len() < 12 || !bytes.starts_with(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return Ok(());
+    }
+    let riff_size = u32::try_from(bytes.len().saturating_sub(8))
+        .map_err(|_| "WAV 文件过大，无法写入 RIFF 长度".to_string())?;
+    bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        if chunk_id == b"data" {
+            let data_size = u32::try_from(bytes.len().saturating_sub(offset + 8))
+                .map_err(|_| "WAV 数据过大，无法写入 data 长度".to_string())?;
+            bytes[offset + 4..offset + 8].copy_from_slice(&data_size.to_le_bytes());
+            return Ok(());
+        }
+        let chunk_size = u32::from_le_bytes(
+            bytes[offset + 4..offset + 8]
+                .try_into()
+                .map_err(|_| "WAV chunk 长度无效".to_string())?,
+        ) as usize;
+        offset = offset
+            .checked_add(8 + chunk_size + (chunk_size & 1))
+            .ok_or("WAV chunk 偏移溢出")?;
+    }
+    Err("WAV 文件缺少 data chunk".into())
+}
+
+async fn translate(app: &AppHandle, settings: &AppSettings, text: &str) -> Result<String, String> {
+    let model = app.state::<ModelConfig>();
+    if model.api_key.is_empty() {
+        return Err("翻译需要 DeepSeek API Key".into());
+    }
+    let memories = {
+        let db = app.state::<DbState>();
+        let conn = db.0.lock().await;
+        crate::db::list_memories(&conn)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .take(30)
+            .map(|m| format!("- {}", m.text))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let prompt = format!("你是角色语音翻译器。角色人设：{}\n相关长期记忆：\n{}\n将下面文本翻译为 {}，保持角色口吻和原标点结构。如果已经是目标语言则原样返回。只输出 JSON：{{\"translated_text\":\"...\"}}\n文本：{}", settings.persona, memories, settings.vits_target_language, text);
+    let response = reqwest::Client::new().post(format!("{}/chat/completions",model.base_url)).bearer_auth(&model.api_key).json(&serde_json::json!({"model":model.model,"messages":[{"role":"user","content":prompt}],"temperature":0.3,"response_format":{"type":"json_object"},"thinking":{"type":"disabled"}})).send().await.map_err(|e|format!("翻译请求失败：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("翻译模型返回 {}", response.status()));
+    }
+    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let content = value
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .ok_or("翻译没有返回文本")?;
+    let start = content.find('{').ok_or("翻译响应缺少 JSON")?;
+    let end = content.rfind('}').ok_or("翻译响应缺少 JSON")?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&content[start..=end]).map_err(|e| e.to_string())?;
+    parsed
+        .get("translated_text")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|v| !v.trim().is_empty())
+        .ok_or("翻译结果为空".into())
+}
+
+async fn play(path: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let (_stream, handle) =
+            rodio::OutputStream::try_default().map_err(|e| format!("打开音频输出失败：{e}"))?;
+        let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        sink.append(
+            rodio::Decoder::new(StdBufReader::new(file))
+                .map_err(|e| format!("音频解码失败：{e}"))?,
+        );
+        sink.sleep_until_end();
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detect_audio_extension, normalize_streaming_wav_header};
+
+    #[test]
+    fn detects_common_audio_headers() {
+        assert_eq!(detect_audio_extension(b"RIFF1234WAVEfmt ", ""), Some("wav"));
+        assert_eq!(detect_audio_extension(b"ID3anything", ""), Some("mp3"));
+        assert_eq!(detect_audio_extension(b"OggSanything", ""), Some("ogg"));
+        assert_eq!(detect_audio_extension(b"fLaCanything", ""), Some("flac"));
+    }
+
+    #[test]
+    fn rejects_empty_or_non_audio_response() {
+        assert_eq!(detect_audio_extension(b"", ""), None);
+        assert_eq!(
+            detect_audio_extension(b"{\"error\":true}", "application/json"),
+            None
+        );
+    }
+
+    #[test]
+    fn repairs_streaming_wav_placeholder_lengths() {
+        let mut wav = Vec::from(&b"RIFF\xFF\xFF\xFF\x7FWAVEfmt \x10\0\0\0\x01\0\x01\0\xC0\x5D\0\0\x80\xBB\0\0\x02\0\x10\0data\xFF\xFF\xFF\x7F\x01\0\x02\0"[..]);
+        normalize_streaming_wav_header(&mut wav).unwrap();
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 40);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 4);
+    }
+}

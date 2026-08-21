@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ChatPet",
+  "version": "0.1.0",
+  "identifier": "com.chatpet.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1421",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "pet",
+        "title": "ChatPet",
+        "width": 320,
+        "height": 410,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "center": false,
+        "visible": true
+      },
+      {
+        "label": "settings",
+        "title": "ChatPet 设置",
+        "width": 520,
+        "height": 680,
+        "resizable": true,
+        "visible": false
+      },
+      {
+        "label": "todos",
+        "title": "ChatPet 待办",
+        "width": 440,
+        "height": 520,
+        "resizable": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self'"
+    }
+  },
+  "bundle": { "active": false }
+}

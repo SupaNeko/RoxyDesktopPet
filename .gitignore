@@ -1,0 +1,13 @@
+/node_modules/
+/.pnpm-store/
+/.vite/
+/dist/
+/data/
+/.env
+/.env.*
+!/.env.example
+/src-tauri/target/
+/src-tauri/write-test.tmp
+*.log
+.DS_Store
+Thumbs.db
