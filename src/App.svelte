@@ -171,7 +171,7 @@
         <span class="device-row"><select bind:value={settings.microphone_device_name} disabled={voice.state !== 'disabled' && voice.state !== 'error'}><option value={null}>请选择麦克风</option>{#each microphones as device}<option value={device}>{device}</option>{/each}</select><button type="button" onclick={refreshMicrophones} disabled={voice.state !== 'disabled' && voice.state !== 'error'}>刷新</button></span>
       </label>
       <div class="voice-settings">
-        <div class="model-summary"><strong>语音输入方式</strong><small>按键模式不会加载 Silero VAD</small></div>
+        <div class="model-summary"><strong>语音输入方式</strong></div>
         <div class="voice-modes">
           <label><input type="radio" bind:group={voiceInputMode} value="disabled" />关闭</label>
           <label><input type="radio" bind:group={voiceInputMode} value="continuous" />持续监听</label>
@@ -179,7 +179,7 @@
         </div>
         {#if voiceInputMode === 'push_to_talk'}
           <label>全局按键<button type="button" class:capturing={capturingShortcut} class="shortcut-capture" onclick={toggleShortcutCapture}>{pushToTalkLabel}</button></label>
-          <p class="note">点击按钮后按下任意键盘键或鼠标按钮；组合中的所有键全部松开后自动确认。也可以再次点击该按钮，将鼠标左键设为触发键。</p>
+          <p class="note">最好不要使用容易和系统或者其它应用冲突的快捷键</p>
         {:else if voiceInputMode === 'continuous'}
           <button class="option" class:on={voice.state !== 'disabled' && voice.state !== 'error'} onclick={toggleVoice} disabled={!settings.microphone_device_name}>
             {#if voice.state === 'disabled' || voice.state === 'error'}<MicOff size={18} />{:else}<Mic size={18} />{/if}
@@ -202,7 +202,7 @@
 {:else}
   <main class="pet-window" data-tauri-drag-region>
     {#if bubbleVisible || busy || error}
-      <div class="speech-bubble"><p>{error || (busy ? '让我想一想…' : messages.at(-1)?.content || '我在这里。')}</p></div>
+      <div class="speech-bubble"><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
     {/if}
     <button class="pet" style={`width:${172 * petImageSize / 100}px;height:${198 * petImageSize / 100}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src="/roxy-idle.png" alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
