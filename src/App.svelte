@@ -17,6 +17,13 @@
   let bubbleDisplaySeconds = $state(Number(localStorage.getItem('bubbleDisplaySeconds') || '30'));
   let petImageSize = $state(Number(localStorage.getItem('petImageSize') || '100'));
   let bubbleTimer: number | null = null;
+  type PetEmotion = 'shy' | 'affectionate' | 'sad' | 'happy' | 'calm' | 'angry' | 'battle' | 'self_deprecating';
+  const petImages: Record<PetEmotion, string> = {
+    shy: '/roxy-shy.png', affectionate: '/roxy-affectionate.png', sad: '/roxy-sad.png', happy: '/roxy-happy.png',
+    calm: '/roxy-calm.png', angry: '/roxy-angry.png', battle: '/roxy-battle.png', self_deprecating: '/roxy-self_deprecating.png'
+  };
+  let petEmotion = $state<PetEmotion>('calm');
+  let petImageSrc = $derived(petImages[petEmotion]);
   let voice = $state<VoiceStatus>({ state: 'disabled' });
   let microphones = $state<string[]>([]);
   let testingVoice = $state(false);
@@ -26,15 +33,17 @@
   let capturingShortcut = $state(false);
   let shortcutCaptureCommittedAt = 0;
   let todos = $state<Todo[]>([]);
-  function showBubble(timed = true) {
+  function showBubble(timed = true, emotion?: string | null) {
     bubbleVisible = true;
     if (bubbleTimer !== null) window.clearTimeout(bubbleTimer);
-    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; bubbleTimer = null; }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
+    petEmotion = emotion && emotion in petImages ? emotion as PetEmotion : 'calm';
+    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
   }
   function openComposer() { if (!mousePassthrough) { composerVisible = true; requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.pet-composer input')?.focus()); } }
   async function changeMousePassthrough(enabled: boolean) { await setMousePassthrough(enabled); mousePassthrough = enabled; }
   function updatePetImageSize(value: number) { petImageSize = Math.min(150, Math.max(60, value)); localStorage.setItem('petImageSize', String(petImageSize)); emit('pet-image-size-preview', petImageSize).catch(() => {}); }
   onMount(() => {
+    if (label === 'pet') Object.values(petImages).forEach((src) => { const image = new Image(); image.src = src; });
     const blockMenu = (event: MouseEvent) => event.preventDefault(); window.addEventListener('contextmenu', blockMenu);
     let unlisteners: (() => void)[] = [];
     let menuResizeObserver: ResizeObserver | null = null;
@@ -54,14 +63,14 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { proactiveEnabled=event.payload; settings.proactive_enabled=event.payload; }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; proactiveEnabled=s.proactive_enabled; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { proactiveEnabled=event.payload; settings.proactive_enabled=event.payload; }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; proactiveEnabled=s.proactive_enabled; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
     return () => { window.removeEventListener('contextmenu', blockMenu); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
     const content = text.trim(); if (!content || busy) return;
     text = ''; composerVisible = false; error = ''; messages.push({ id: crypto.randomUUID(), role: 'user', content, trigger_type: 'user_text', created_at: Date.now() }); busy = true; showBubble(false);
-    try { messages.push(await sendMessage(content)); showBubble(); } catch (e) { error = String(e); showBubble(); } finally { busy = false; }
+    try { const reply = await sendMessage(content); messages.push(reply); showBubble(true, reply.emotion); } catch (e) { error = String(e); showBubble(); } finally { busy = false; }
   }
   async function persist() {
     saved = false; error = '';
@@ -204,7 +213,7 @@
     {#if bubbleVisible || busy || error}
       <div class="speech-bubble"><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
     {/if}
-    <button class="pet" style={`width:${172 * petImageSize / 100}px;height:${198 * petImageSize / 100}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src="/roxy-idle.png" alt="洛琪希" draggable="false" /></button>
+    <button class="pet" style={`width:${172 * petImageSize / 100}px;height:${198 * petImageSize / 100}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
       <form class="pet-composer" onsubmit={(e) => { e.preventDefault(); submit(); }}>
         <input bind:value={text} onkeydown={(e) => { if (e.key === 'Escape') composerVisible=false; }} placeholder="和洛琪希说点什么…" />
