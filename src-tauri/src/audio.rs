@@ -26,6 +26,7 @@ pub struct VoiceState {
     pub active: Arc<AtomicBool>,
     pub stream: Mutex<Option<cpal::Stream>>,
     pub completed: Arc<StdMutex<VecDeque<Utterance>>>,
+    pub push_samples: Arc<StdMutex<Vec<i16>>>,
 }
 
 impl Default for VoiceState {
@@ -34,6 +35,7 @@ impl Default for VoiceState {
             active: Arc::new(AtomicBool::new(false)),
             stream: Mutex::new(None),
             completed: Arc::new(StdMutex::new(VecDeque::new())),
+            push_samples: Arc::new(StdMutex::new(Vec::new())),
         }
     }
 }
@@ -165,6 +167,9 @@ pub async fn start(
         .map_err(|e| format!("无法读取麦克风配置：{e}"))?;
     let source_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
+    if state.active.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(64);
     state.active.store(true, Ordering::SeqCst);
     let active = state.active.clone();
@@ -382,6 +387,132 @@ fn to_mono_u16(data: &[u16], channels: usize) -> Vec<f32> {
         .collect()
 }
 
+pub async fn start_push_to_talk(
+    app: AppHandle,
+    state: &VoiceState,
+    selected_device_name: Option<&str>,
+) -> Result<(), String> {
+    let host = cpal::default_host();
+    let selected = selected_device_name
+        .filter(|name| !name.trim().is_empty())
+        .ok_or("尚未选择麦克风，请先在设置中选择输入设备")?;
+    let device = host
+        .input_devices()
+        .map_err(|e| format!("无法枚举麦克风：{e}"))?
+        .find(|device| device.name().ok().as_deref() == Some(selected))
+        .ok_or_else(|| format!("已选择的麦克风不存在或已断开：{selected}"))?;
+    let config = device
+        .default_input_config()
+        .map_err(|e| format!("无法读取麦克风配置：{e}"))?;
+    let source_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    if state.active.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    if let Ok(mut samples) = state.push_samples.lock() {
+        samples.clear();
+    }
+    let stream_config: cpal::StreamConfig = config.clone().into();
+    let build = |samples: Arc<StdMutex<Vec<i16>>>, mut phase: u64| {
+        move |mono: Vec<f32>| {
+            if let Ok(mut output) = samples.lock() {
+                for sample in mono {
+                    phase += TARGET_RATE as u64;
+                    if phase >= source_rate as u64 {
+                        phase -= source_rate as u64;
+                        output.push((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
+                    }
+                }
+            }
+        }
+    };
+    let err_app = app.clone();
+    let err_active = state.active.clone();
+    let error = move |e| {
+        err_active.store(false, Ordering::SeqCst);
+        emit(&err_app, "error", Some(format!("麦克风流错误：{e}")), None);
+    };
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let mut append = build(state.push_samples.clone(), 0);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[f32], _| append(to_mono_f32(data, channels)),
+                error,
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let mut append = build(state.push_samples.clone(), 0);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[i16], _| append(to_mono_i16(data, channels)),
+                error,
+                None,
+            )
+        }
+        cpal::SampleFormat::U16 => {
+            let mut append = build(state.push_samples.clone(), 0);
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[u16], _| append(to_mono_u16(data, channels)),
+                error,
+                None,
+            )
+        }
+        _ => {
+            state.active.store(false, Ordering::SeqCst);
+            return Err(format!(
+                "当前麦克风格式 {:?} 尚不支持",
+                config.sample_format()
+            ));
+        }
+    }
+    .map_err(|e| format!("无法打开麦克风：{e}"))?;
+    stream.play().map_err(|e| format!("无法启动麦克风：{e}"))?;
+    *state.stream.lock().await = Some(stream);
+    emit(&app, "speaking", Some("按键录音中".into()), None);
+    Ok(())
+}
+
+pub async fn finish_push_to_talk(
+    app: AppHandle,
+    state: &VoiceState,
+    credentials: crate::asr::XfyunCredentials,
+) -> Result<(), String> {
+    if !state.active.swap(false, Ordering::SeqCst) {
+        return Ok(());
+    }
+    *state.stream.lock().await = None;
+    let samples = state
+        .push_samples
+        .lock()
+        .map(|mut samples| std::mem::take(&mut *samples))
+        .map_err(|_| "无法读取按键录音")?;
+    let duration_ms = samples.len() as u64 * 1000 / TARGET_RATE as u64;
+    if duration_ms < 200 {
+        emit(
+            &app,
+            "disabled",
+            Some("录音时间太短".into()),
+            Some(duration_ms),
+        );
+        return Ok(());
+    }
+    emit(
+        &app,
+        "recognizing",
+        Some("正在识别完整录音…".into()),
+        Some(duration_ms),
+    );
+    let text = crate::asr::transcribe(samples, credentials).await?;
+    let _ = app.emit("voice-transcript", &text);
+    emit(&app, "thinking", Some(text.clone()), Some(duration_ms));
+    let message = crate::commands::process_voice_text(app.clone(), text).await?;
+    let _ = app.emit("assistant-message", message);
+    emit(&app, "disabled", None, None);
+    Ok(())
+}
 pub async fn stop(state: &VoiceState) {
     state.active.store(false, Ordering::SeqCst);
     *state.stream.lock().await = None;

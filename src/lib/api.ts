@@ -46,14 +46,24 @@ export async function sendMessage(content: string): Promise<Message> {
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
-  if (!inTauri()) return { database_ready: true, llm_configured: false, vits_status: 'not_configured', memory_status: 'not_configured', microphone_status: 'disabled', qdrant_runtime_status: 'not_started' };
+  if (!inTauri()) return { database_ready: true, llm_configured: false, vits_status: 'not_configured', memory_status: 'not_configured', microphone_status: 'disabled', qdrant_runtime_status: 'not_started', voice_hardware_status: 'unsupported', voice_hardware_detail: '仅支持 NVIDIA GPU', voice_gpu: null };
   return invoke('get_runtime_status');
 }
 
 export async function startVoiceListening(): Promise<void> { if (inTauri()) await invoke('start_voice_listening'); }
 export async function stopVoiceListening(): Promise<void> { if (inTauri()) await invoke('stop_voice_listening'); }
 export async function listMicrophoneDevices(): Promise<string[]> { return inTauri() ? invoke('list_microphone_devices') : []; }
+export interface CapturedBinding { tokens: string[]; label: string; }
+export async function setPushToTalkShortcut(tokens: string[]): Promise<CapturedBinding> { return inTauri() ? invoke('set_push_to_talk_shortcut', { tokens }) : { tokens, label: tokens.join(' + ') }; }
+export async function beginShortcutCapture(): Promise<void> { if (inTauri()) await invoke('begin_shortcut_capture'); }
+export async function cancelShortcutCapture(): Promise<void> { if (inTauri()) await invoke('cancel_shortcut_capture'); }
 export async function scanVitsModels(): Promise<VitsModelInfo[]> { return inTauri() ? invoke('scan_vits_models') : []; }
 export async function testVoiceOutput(): Promise<void> { if (inTauri()) await invoke('test_voice_output'); }
+export async function startGptSovits(): Promise<void> { if (inTauri()) await invoke('start_gpt_sovits'); }
 export async function listTodos(): Promise<Todo[]> { return inTauri() ? invoke('list_todos') : []; }
 export async function openAppWindow(label: 'settings' | 'todos'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
+export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
+export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }
+
+export async function setMousePassthrough(enabled: boolean): Promise<void> { if (inTauri()) await invoke('set_mouse_passthrough', { enabled }); }
+export async function getMousePassthrough(): Promise<boolean> { return inTauri() ? invoke('get_mouse_passthrough') : false; }

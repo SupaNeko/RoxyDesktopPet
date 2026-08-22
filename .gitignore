@@ -11,3 +11,13 @@
 *.log
 .DS_Store
 Thumbs.db
+# Local release and voice-extension build outputs
+/artifacts/
+/idle-reference-preview.jpg
+
+# Generated icons for platforms not distributed by this Windows-only project
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+/src-tauri/icons/icon.icns
+/src-tauri/icons/Square*Logo.png
+/src-tauri/icons/StoreLogo.png

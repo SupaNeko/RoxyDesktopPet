@@ -99,6 +99,10 @@ pub struct Message {
     pub id: String,
     pub role: String,
     pub content: String,
+    #[serde(default)]
+    pub japanese_text: Option<String>,
+    #[serde(default)]
+    pub emotion: Option<String>,
     pub trigger_type: String,
     pub created_at: i64,
 }
@@ -165,6 +169,17 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
          CREATE INDEX IF NOT EXISTS idx_occurrences_due ON reminder_occurrences(status, scheduled_at_utc);",
     )?;
+    let message_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(messages)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !message_columns.iter().any(|name| name == "japanese_text") {
+        conn.execute("ALTER TABLE messages ADD COLUMN japanese_text TEXT", [])?;
+    }
+    if !message_columns.iter().any(|name| name == "emotion") {
+        conn.execute("ALTER TABLE messages ADD COLUMN emotion TEXT", [])?;
+    }
     let columns: Vec<String> = conn
         .prepare("PRAGMA table_info(app_settings)")?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -242,6 +257,19 @@ pub fn get_settings(conn: &Connection, key_configured: bool) -> rusqlite::Result
     )
 }
 
+pub fn toggle_proactive_enabled(conn: &Connection) -> rusqlite::Result<bool> {
+    let enabled = conn.query_row(
+        "SELECT proactive_enabled FROM app_settings WHERE id=1",
+        [],
+        |row| Ok(row.get::<_, i32>(0)? == 0),
+    )?;
+    conn.execute(
+        "UPDATE app_settings SET proactive_enabled=? WHERE id=1",
+        params![enabled as i32],
+    )?;
+    Ok(enabled)
+}
+
 pub fn save_settings(conn: &Connection, s: &AppSettings) -> rusqlite::Result<()> {
     conn.execute("UPDATE app_settings SET pet_name=?, persona=?, user_name=?, api_base_url=?, api_model=?, voice_output_enabled=?, microphone_device_name=?, asr_app_id=?, asr_api_key=?, asr_api_secret=?, proactive_enabled=?, proactive_min_minutes=?, proactive_max_minutes=?, proactive_daily_limit=?, qdrant_url=?, embedding_base_url=?, embedding_model=?, embedding_api_key=?, embedding_dimension=?, memory_observer_enabled=?, memory_observer_interval=?, voice_output_mode=?, tts_api_protocol=?, tts_api_base_url=?, tts_api_model=?, tts_api_key=?, tts_api_voice=?, tts_api_language=?, vits_model_name=?, vits_model_path=?, vits_speaker_id=?, vits_target_language=?, vits_speed=?, vits_emotion_params=?, vits_translate_enabled=? WHERE id=1",
         params![s.pet_name, s.persona, s.user_name, s.api_base_url, s.api_model, s.voice_output_enabled as i32, s.microphone_device_name, s.asr_app_id, s.asr_api_key, s.asr_api_secret, s.proactive_enabled as i32, s.proactive_min_minutes, s.proactive_max_minutes, s.proactive_daily_limit,s.qdrant_url,s.embedding_base_url,s.embedding_model,s.embedding_api_key,s.embedding_dimension,s.memory_observer_enabled as i32,s.memory_observer_interval,s.voice_output_mode,s.tts_api_protocol,s.tts_api_base_url,s.tts_api_model,s.tts_api_key,s.tts_api_voice,s.tts_api_language,s.vits_model_name,s.vits_model_path,s.vits_speaker_id,s.vits_target_language,s.vits_speed,s.vits_emotion_params,s.vits_translate_enabled as i32])?;
@@ -250,22 +278,24 @@ pub fn save_settings(conn: &Connection, s: &AppSettings) -> rusqlite::Result<()>
 
 pub fn insert_message(conn: &Connection, m: &Message) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO messages(id, role, content, trigger_type, created_at) VALUES(?, ?, ?, ?, ?)",
-        params![m.id, m.role, m.content, m.trigger_type, m.created_at],
+        "INSERT INTO messages(id, role, content, japanese_text, emotion, trigger_type, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        params![m.id, m.role, m.content, m.japanese_text, m.emotion, m.trigger_type, m.created_at],
     )?;
     Ok(())
 }
 
 pub fn list_messages(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<Message>> {
-    let mut stmt = conn.prepare("SELECT id, role, content, trigger_type, created_at FROM (SELECT * FROM messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at")?;
+    let mut stmt = conn.prepare("SELECT id, role, content, japanese_text, emotion, trigger_type, created_at FROM (SELECT * FROM messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at")?;
     let messages = stmt
         .query_map([limit.min(500)], |r| {
             Ok(Message {
                 id: r.get(0)?,
                 role: r.get(1)?,
                 content: r.get(2)?,
-                trigger_type: r.get(3)?,
-                created_at: r.get(4)?,
+                japanese_text: r.get(3)?,
+                emotion: r.get(4)?,
+                trigger_type: r.get(5)?,
+                created_at: r.get(6)?,
             })
         })?
         .collect();
@@ -290,6 +320,8 @@ pub fn observer_message_batch(
                     id: r.get(1)?,
                     role: r.get(2)?,
                     content: r.get(3)?,
+                    japanese_text: None,
+                    emotion: None,
                     trigger_type: r.get(4)?,
                     created_at: r.get(5)?,
                 },
@@ -519,6 +551,8 @@ mod tests {
             id: "1".into(),
             role: "user".into(),
             content: "hi".into(),
+            japanese_text: None,
+            emotion: None,
             trigger_type: "user_text".into(),
             created_at: 1,
         };
@@ -555,6 +589,8 @@ mod tests {
                     id: index.to_string(),
                     role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
                     content: format!("message {index}"),
+                    japanese_text: None,
+                    emotion: None,
                     trigger_type: "user_text".into(),
                     created_at: index,
                 },

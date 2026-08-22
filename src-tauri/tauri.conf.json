@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ChatPet",
+  "productName": "RoxyDesktopPet",
   "version": "0.1.0",
   "identifier": "com.chatpet.desktop",
   "build": {
@@ -23,7 +23,21 @@
         "skipTaskbar": true,
         "shadow": false,
         "center": false,
-        "visible": true
+        "visible": false
+      },
+      {
+        "label": "pet-menu",
+        "title": "Roxy Menu",
+        "url": "index.html?view=pet-menu",
+        "width": 200,
+        "height": 230,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
       },
       {
         "label": "settings",
@@ -46,5 +60,15 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self'"
     }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
 }

@@ -2,8 +2,11 @@ mod asr;
 mod audio;
 mod commands;
 mod db;
+mod global_input;
+mod gpt_sovits;
 mod memory;
 mod observer;
+mod pet_interaction;
 mod qdrant_runtime;
 mod scheduler;
 mod voice_output;
@@ -77,9 +80,8 @@ fn model_config() -> ModelConfig {
     };
     let file = read_dotenv(&env_path);
     let value = |key: &str, default: &str| {
-        std::env::var(key)
-            .ok()
-            .or_else(|| file.get(key).cloned())
+        file.get(key)
+            .cloned()
             .unwrap_or_else(|| default.to_string())
     };
     ModelConfig {
@@ -104,12 +106,7 @@ fn asr_env_config() -> AsrEnvConfig {
             .join(".env")
     };
     let file = read_dotenv(&env_path);
-    let value = |key: &str| {
-        std::env::var(key)
-            .ok()
-            .or_else(|| file.get(key).cloned())
-            .unwrap_or_default()
-    };
+    let value = |key: &str| file.get(key).cloned().unwrap_or_default();
     AsrEnvConfig {
         app_id: value("XFYUN_ASR_APP_ID"),
         api_key: value("XFYUN_ASR_API_KEY"),
@@ -130,12 +127,7 @@ fn memory_env_config() -> MemoryEnvConfig {
             .join(".env")
     };
     let file = read_dotenv(&env_path);
-    let value = |key: &str, default: &str| {
-        std::env::var(key)
-            .ok()
-            .or_else(|| file.get(key).cloned())
-            .unwrap_or_else(|| default.into())
-    };
+    let value = |key: &str, default: &str| file.get(key).cloned().unwrap_or_else(|| default.into());
     MemoryEnvConfig {
         qdrant_url: value("QDRANT_URL", "http://127.0.0.1:6333"),
         embedding_base_url: value("EMBEDDING_BASE_URL", ""),
@@ -159,29 +151,78 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct PetWindowPosition {
+    x: i32,
+    y: i32,
+}
+
+fn pet_window_position_path() -> PathBuf {
+    data_dir().join("pet-window-position.json")
+}
+
+fn load_pet_window_position() -> Option<tauri::PhysicalPosition<i32>> {
+    let saved = std::fs::read_to_string(pet_window_position_path()).ok()?;
+    let position: PetWindowPosition = serde_json::from_str(&saved).ok()?;
+    Some(tauri::PhysicalPosition::new(position.x, position.y))
+}
+
+fn save_pet_window_position(position: tauri::PhysicalPosition<i32>) {
+    let path = pet_window_position_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let saved = PetWindowPosition {
+        x: position.x,
+        y: position.y,
+    };
+    if let Ok(json) = serde_json::to_string(&saved) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
 pub fn run() {
+    let db = db::open(&data_dir().join("chatpet.db")).expect("failed to open ChatPet database");
+    let voice_enabled = db::get_settings(&db, false)
+        .ok()
+        .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
+    let saved_qdrant_url = db::get_settings(&db, false)
+        .ok()
+        .map(|settings| settings.qdrant_url)
+        .filter(|url| !url.is_empty());
+    let memory_env = memory_env_config();
+    let qdrant_url = saved_qdrant_url.unwrap_or_else(|| memory_env.qdrant_url.clone());
+
     tauri::Builder::default()
-        .setup(|app| {
-            let db = db::open(&data_dir().join("chatpet.db"))?;
-            let saved_qdrant_url = db::get_settings(&db, false)
-                .ok()
-                .map(|s| s.qdrant_url)
-                .filter(|url| !url.is_empty());
-            app.manage(db::DbState(Mutex::new(db)));
-            app.manage(model_config());
-            app.manage(asr_env_config());
-            let memory_env = memory_env_config();
-            let qdrant_url = saved_qdrant_url.unwrap_or_else(|| memory_env.qdrant_url.clone());
-            app.manage(memory_env);
-            app.manage(qdrant_runtime::QdrantRuntime::default());
+        // Command state must exist before setup because configured webviews can load
+        // and invoke commands while the setup callback is still running.
+        .manage(db::DbState(Mutex::new(db)))
+        .manage(model_config())
+        .manage(asr_env_config())
+        .manage(memory_env)
+        .manage(qdrant_runtime::QdrantRuntime::default())
+        .manage(gpt_sovits::GptSoVitsState::default())
+        .manage(audio::VoiceState::default())
+        .manage(global_input::GlobalInputState::default())
+        .manage(pet_interaction::PetInteractionState::default())
+        .manage(ConversationState(Mutex::new(())))
+        .manage(voice_output::VoiceOutputState::new(&data_dir()))
+        .setup(move |app| {
             let runtime_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let runtime = runtime_app.state::<qdrant_runtime::QdrantRuntime>();
                 let _ = qdrant_runtime::ensure(runtime.inner(), &qdrant_url).await;
             });
-            app.manage(audio::VoiceState::default());
-            app.manage(ConversationState(Mutex::new(())));
-            app.manage(voice_output::VoiceOutputState::new(&data_dir()));
+            if voice_enabled {
+                let voice_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = voice_app.state::<gpt_sovits::GptSoVitsState>();
+                    if let Err(error) = gpt_sovits::ensure(state.inner()).await {
+                        eprintln!("GPT-SoVITS startup failed: {error}");
+                    }
+                });
+            }
+            global_input::start_listener(app.handle().clone());
             scheduler::start(app.handle().clone());
 
             if let Some(settings_window) = app.get_webview_window("settings") {
@@ -203,11 +244,56 @@ pub fn run() {
                 });
             }
 
+            if let Some(menu_window) = app.get_webview_window("pet-menu") {
+                let window_to_hide = menu_window.clone();
+                menu_window.on_window_event(move |event| {
+                    if let WindowEvent::Focused(false) = event {
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
+
+            if let Some(pet_window) = app.get_webview_window("pet") {
+                if let Some(position) = load_pet_window_position() {
+                    let _ = pet_window.set_position(position);
+                }
+                pet_window.on_window_event(move |event| {
+                    if let WindowEvent::Moved(position) = event {
+                        save_pet_window_position(*position);
+                    }
+                });
+                let _ = pet_window.show();
+                pet_window.on_menu_event(|window, event| match event.id.as_ref() {
+                    "pet_passthrough" => {
+                        let _ = pet_interaction::set(window.app_handle(), false);
+                    }
+                    "pet_settings" => {
+                        if let Some(w) = window.app_handle().get_webview_window("settings") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "pet_todos" => {
+                        if let Some(w) = window.app_handle().get_webview_window("todos") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    _ => {}
+                });
+            }
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "显示/隐藏桌宠", true, None::<&str>)?;
+            let passthrough =
+                MenuItem::with_id(app, "passthrough", "切换鼠标穿透", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings, &toggle, &quit])?;
-            TrayIconBuilder::new()
+            let menu = Menu::with_items(app, &[&settings, &toggle, &passthrough, &quit])?;
+            let tray_icon = app.default_window_icon().cloned();
+            let mut tray_builder = TrayIconBuilder::new();
+            if let Some(icon) = tray_icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            tray_builder
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -227,9 +313,14 @@ pub fn run() {
                             }
                         }
                     }
+                    "passthrough" => {
+                        let _ = pet_interaction::toggle(app);
+                    }
                     "quit" => {
                         let handle = app.clone();
                         tauri::async_runtime::spawn(async move {
+                            let voice = handle.state::<gpt_sovits::GptSoVitsState>();
+                            gpt_sovits::shutdown(voice.inner()).await;
                             let runtime = handle.state::<qdrant_runtime::QdrantRuntime>();
                             qdrant_runtime::shutdown(runtime.inner()).await;
                             handle.exit(0);
@@ -262,12 +353,22 @@ pub fn run() {
             commands::send_text_message,
             commands::start_voice_listening,
             commands::stop_voice_listening,
+            commands::begin_push_to_talk,
+            commands::end_push_to_talk,
+            commands::set_push_to_talk_shortcut,
+            commands::begin_shortcut_capture,
+            commands::cancel_shortcut_capture,
             commands::list_microphone_devices,
             commands::list_memories,
             commands::list_todos,
             commands::open_app_window,
+            commands::show_pet_menu,
+            commands::toggle_proactive_enabled,
             commands::scan_vits_models,
-            commands::test_voice_output
+            commands::test_voice_output,
+            commands::start_gpt_sovits,
+            pet_interaction::set_mouse_passthrough,
+            pet_interaction::get_mouse_passthrough
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChatPet");

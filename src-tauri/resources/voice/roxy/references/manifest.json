@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "character": "roxy",
+  "references": [
+    {
+      "emotion": "shy",
+      "source_emotion": "害羞",
+      "file": "害羞/えっと、ルーデオスさん、その、ありがとうございました.wav",
+      "prompt_text": "えっと、ルーデオスさん、その、ありがとうございました",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "shy",
+      "source_emotion": "害羞",
+      "file": "害羞/そ、そんな呼び方をして、慣れ慣れ思考はありませんか.wav",
+      "prompt_text": "そ、そんな呼び方をして、慣れ慣れ思考はありませんか",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "affectionate",
+      "source_emotion": "撒娇",
+      "file": "撒娇/ルディ、ちょっと背中を貸してもらっていいですか.wav",
+      "prompt_text": "ルディ、ちょっと背中を貸してもらっていいですか",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "sad",
+      "source_emotion": "委屈",
+      "file": "委屈/だって仕方ないじゃないですか好きなんですよ.wav",
+      "prompt_text": "だって仕方ないじゃないですか好きなんですよ",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "happy",
+      "source_emotion": "欣慰",
+      "file": "欣慰/はいそうですねルディ身長大きくなりましたね.wav",
+      "prompt_text": "はいそうですねルディ身長大きくなりましたね",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "calm",
+      "source_emotion": "慵懒",
+      "file": "慵懒/じゃあ私の代わりに陛下のその目で人探してもお願いします.wav",
+      "prompt_text": "じゃあ私の代わりに陛下のその目で人探してもお願いします",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "angry",
+      "source_emotion": "责备",
+      "file": "责备/もし妊娠でもしてしまったらどうする気なのですかまったく.wav",
+      "prompt_text": "もし妊娠でもしてしまったらどうする気なのですかまったく",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "battle",
+      "source_emotion": "战斗",
+      "file": "战斗/ばあ姉よ全てを押し流しあらゆるものを駆逐せよ.wav",
+      "prompt_text": "ばあ姉よ全てを押し流しあらゆるものを駆逐せよ",
+      "prompt_lang": "ja"
+    },
+    {
+      "emotion": "self_deprecating",
+      "source_emotion": "自嘲",
+      "file": "自嘲/なるほど、これは鍛えがいがありそうですね.wav",
+      "prompt_text": "なるほど、これは鍛えがいがありそうですね",
+      "prompt_lang": "ja"
+    }
+  ]
+}

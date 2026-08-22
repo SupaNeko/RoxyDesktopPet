@@ -257,6 +257,8 @@ pub async fn test(app: &AppHandle) -> Result<(), String> {
         id: uuid::Uuid::new_v4().to_string(),
         role: "assistant".into(),
         content: "你好，我是你的桌面伙伴。".into(),
+        japanese_text: Some("こんにちは。ロキシーです。".into()),
+        emotion: Some("calm".into()),
         trigger_type: "voice_test".into(),
         created_at: chrono::Utc::now().timestamp_millis(),
     };
@@ -284,6 +286,8 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
     std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     let path = if settings.voice_output_mode == "api" {
         api_tts(&settings, &message.content, &cache.join(&message.id)).await?
+    } else if settings.voice_output_mode == "gpt_sovits" {
+        gpt_sovits_tts(app, message, &cache.join(format!("{}.wav", message.id))).await?
     } else if settings.voice_output_mode == "vits" {
         if !crate::data_dir()
             .join("vits_runtime")
@@ -317,6 +321,64 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
         return Ok(());
     };
     play(path).await
+}
+
+async fn gpt_sovits_tts(
+    app: &AppHandle,
+    message: &Message,
+    output: &Path,
+) -> Result<PathBuf, String> {
+    let text = message
+        .japanese_text
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .ok_or("GPT-SoVITS 消息缺少日文文本")?;
+    let runtime = app.state::<crate::gpt_sovits::GptSoVitsState>();
+    crate::gpt_sovits::ensure(runtime.inner()).await?;
+    let folder = match message.emotion.as_deref().unwrap_or("calm") {
+        "shy" => "害羞",
+        "affectionate" => "撒娇",
+        "sad" => "委屈",
+        "happy" => "欣慰",
+        "angry" => "责备",
+        "battle" => "战斗",
+        "self_deprecating" => "自嘲",
+        _ => "慵懒",
+    };
+    let root = crate::gpt_sovits::references_root()?;
+    let candidates = std::fs::read_dir(root.join(folder))
+        .map_err(|e| format!("读取情绪参考音频失败：{e}"))?
+        .filter_map(Result::ok)
+        .map(|v| v.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|v| v.to_str())
+                .is_some_and(|v| v.eq_ignore_ascii_case("wav"))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(format!("情绪 {folder} 没有参考音频"));
+    }
+    let reference = &candidates[rand::random_range(0..candidates.len())];
+    let prompt = reference
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .ok_or("参考音频文件名不是有效日语文本")?;
+    let response = reqwest::Client::new().post("http://127.0.0.1:9880/tts").json(&serde_json::json!({
+        "text":text,"text_lang":"ja","ref_audio_path":reference.to_string_lossy(),"prompt_text":prompt,"prompt_lang":"ja",
+        "text_split_method":"cut5","batch_size":1,"media_type":"wav","streaming_mode":false,"top_k":15,"top_p":1.0,"temperature":1.0,"speed_factor":1.0
+    })).send().await.map_err(|e|format!("GPT-SoVITS 请求失败：{e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("GPT-SoVITS 返回 {status}: {body}"));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if !bytes.starts_with(b"RIFF") {
+        return Err("GPT-SoVITS 返回的不是 WAV".into());
+    }
+    std::fs::write(output, &bytes).map_err(|e| e.to_string())?;
+    Ok(output.to_path_buf())
 }
 
 async fn api_tts(settings: &AppSettings, text: &str, output: &Path) -> Result<PathBuf, String> {

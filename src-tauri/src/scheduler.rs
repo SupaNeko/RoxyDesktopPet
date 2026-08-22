@@ -39,6 +39,8 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
                     id: uuid::Uuid::new_v4().to_string(),
                     role: "assistant".into(),
                     content: format!("提醒：{}", item.title),
+                    japanese_text: None,
+                    emotion: Some("calm".into()),
                     trigger_type: "reminder_due".into(),
                     created_at: chrono::Utc::now().timestamp_millis(),
                 },

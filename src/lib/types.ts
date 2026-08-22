@@ -6,7 +6,7 @@ export interface AppSettings {
   api_model: string;
   api_key_configured: boolean;
   voice_output_enabled: boolean;
-  voice_output_mode: 'disabled' | 'api' | 'vits';
+  voice_output_mode: 'disabled' | 'gpt_sovits';
   tts_api_protocol: 'dashscope' | 'openai';
   tts_api_base_url: string;
   tts_api_model: string;
@@ -44,6 +44,8 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  japanese_text?: string | null;
+  emotion?: string | null;
   trigger_type: string;
   created_at: number;
 }
@@ -51,10 +53,13 @@ export interface Message {
 export interface RuntimeStatus {
   database_ready: boolean;
   llm_configured: boolean;
-  vits_status: 'disabled' | 'not_configured' | 'available';
+  vits_status: 'disabled' | 'not_configured' | 'unsupported_gpu' | 'starting' | 'available' | 'error';
   memory_status: 'not_configured' | 'unavailable' | 'available';
   microphone_status: 'disabled' | 'listening' | 'error';
   qdrant_runtime_status: string;
+  voice_hardware_status: 'supported' | 'unsupported';
+  voice_hardware_detail: string;
+  voice_gpu: string | null;
 }
 
 export interface VoiceStatus { state: 'disabled' | 'listening' | 'speaking' | 'recognizing' | 'thinking' | 'error'; detail?: string; duration_ms?: number; }
