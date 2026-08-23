@@ -1,4 +1,5 @@
 use base64::Engine;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::io::BufReader as StdBufReader;
 use std::path::{Path, PathBuf};
@@ -284,10 +285,12 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
     }
     let cache = crate::data_dir().join("voice_cache");
     std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    if settings.voice_output_mode == "gpt_sovits" {
+        // 流式合成：边下边播，函数内部完成播放与缓存落盘
+        return gpt_sovits_tts(app, message, &cache.join(format!("{}.wav", message.id))).await;
+    }
     let path = if settings.voice_output_mode == "api" {
         api_tts(&settings, &message.content, &cache.join(&message.id)).await?
-    } else if settings.voice_output_mode == "gpt_sovits" {
-        gpt_sovits_tts(app, message, &cache.join(format!("{}.wav", message.id))).await?
     } else if settings.voice_output_mode == "vits" {
         if !crate::data_dir()
             .join("vits_runtime")
@@ -323,11 +326,15 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
     play(path).await
 }
 
+/// GPT-SoVITS 流式合成：边合成边播放，结束后落盘缓存。
+/// api_v2.py 在 streaming_mode 2/3 + media_type "wav" 下，先返回一个占位长度的
+/// WAV 头，随后按合成进度返回裸 int16 PCM chunk；合成结束后用
+/// normalize_streaming_wav_header 修正长度字段，保证缓存文件仍是合法 WAV。
 async fn gpt_sovits_tts(
     app: &AppHandle,
     message: &Message,
     output: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<(), String> {
     let text = message
         .japanese_text
         .as_deref()
@@ -366,19 +373,158 @@ async fn gpt_sovits_tts(
         .ok_or("参考音频文件名不是有效日语文本")?;
     let response = reqwest::Client::new().post("http://127.0.0.1:9880/tts").json(&serde_json::json!({
         "text":text,"text_lang":"ja","ref_audio_path":reference.to_string_lossy(),"prompt_text":prompt,"prompt_lang":"ja",
-        "text_split_method":"cut5","batch_size":1,"media_type":"wav","streaming_mode":false,"top_k":15,"top_p":1.0,"temperature":1.0,"speed_factor":1.0
+        "text_split_method":"cut5","batch_size":1,"media_type":"wav","streaming_mode":2,"top_k":15,"top_p":1.0,"temperature":1.0,"speed_factor":1.0
     })).send().await.map_err(|e|format!("GPT-SoVITS 请求失败：{e}"))?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(format!("GPT-SoVITS 返回 {status}: {body}"));
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+
+    // 播放线程消费字节流；本任务同时收集完整字节用于缓存。
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let player = tokio::task::spawn_blocking(move || play_pcm_stream(rx));
+    let mut bytes = Vec::new();
+    let mut stream_error: Option<String> = None;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(chunk) => {
+                if tx.send(chunk.to_vec()).is_err() {
+                    stream_error = Some("音频播放线程意外退出".into());
+                    break;
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Err(e) => {
+                stream_error = Some(format!("GPT-SoVITS 流式传输中断：{e}"));
+                break;
+            }
+        }
+    }
+    drop(tx);
+    // 播放线程在通道关闭后播完剩余缓冲再退出
+    player.await.map_err(|e| e.to_string())??;
+    if let Some(error) = stream_error {
+        return Err(error);
+    }
     if !bytes.starts_with(b"RIFF") {
         return Err("GPT-SoVITS 返回的不是 WAV".into());
     }
+    normalize_streaming_wav_header(&mut bytes)?;
     std::fs::write(output, &bytes).map_err(|e| e.to_string())?;
-    Ok(output.to_path_buf())
+    Ok(())
+}
+
+/// 消费 GPT-SoVITS 流式 WAV 字节流并实时播放（在阻塞线程中运行）。
+/// 先解析 WAV 头拿采样率/声道，之后的裸 PCM 累积到预缓冲量才开始播，
+/// 降低合成速度波动导致的断流卡顿。
+fn play_pcm_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>) -> Result<(), String> {
+    const PREBUFFER_MS: usize = 700;
+    let mut header_buf: Vec<u8> = Vec::new();
+    let mut format: Option<(u32, u16)> = None; // (采样率, 声道数)
+    let mut prebuffer_bytes = 0usize;
+    let mut pending_pcm: Vec<u8> = Vec::new();
+    let mut output: Option<(rodio::OutputStream, rodio::Sink)> = None;
+
+    for chunk in rx.iter() {
+        if format.is_none() {
+            header_buf.extend_from_slice(&chunk);
+            match parse_wav_stream_header(&header_buf) {
+                Some((pcm_offset, sample_rate, channels)) => {
+                    format = Some((sample_rate, channels));
+                    prebuffer_bytes =
+                        sample_rate as usize * channels as usize * 2 * PREBUFFER_MS / 1000;
+                    pending_pcm.extend_from_slice(&header_buf[pcm_offset..]);
+                    header_buf.clear();
+                }
+                None => {
+                    if header_buf.len() > 4096 {
+                        return Err("GPT-SoVITS 流式响应缺少有效 WAV 头（或不是 16-bit PCM）".into());
+                    }
+                    continue;
+                }
+            }
+        } else {
+            pending_pcm.extend_from_slice(&chunk);
+        }
+        let (sample_rate, channels) = format.expect("格式已解析");
+        if output.is_none() && pending_pcm.len() >= prebuffer_bytes.max(1) {
+            output = Some(create_stream_output()?);
+        }
+        if let Some((_, sink)) = &output {
+            flush_pcm(sink, &mut pending_pcm, sample_rate, channels);
+        }
+    }
+
+    // 通道关闭（合成结束）：音频太短不足预缓冲量也要播
+    let (sample_rate, channels) = format.ok_or("GPT-SoVITS 未返回音频数据")?;
+    if output.is_none() {
+        output = Some(create_stream_output()?);
+    }
+    if let Some((_, sink)) = &output {
+        flush_pcm(sink, &mut pending_pcm, sample_rate, channels);
+        sink.sleep_until_end();
+    }
+    Ok(())
+}
+
+fn create_stream_output() -> Result<(rodio::OutputStream, rodio::Sink), String> {
+    let (stream, handle) =
+        rodio::OutputStream::try_default().map_err(|e| format!("打开音频输出失败：{e}"))?;
+    let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
+    Ok((stream, sink))
+}
+
+/// 把 pending 中完整的 int16 样本推入 sink；保留末尾可能残缺的单个字节。
+fn flush_pcm(sink: &rodio::Sink, pending: &mut Vec<u8>, sample_rate: u32, channels: u16) {
+    let usable = pending.len() & !1;
+    if usable == 0 {
+        return;
+    }
+    let samples: Vec<i16> = pending
+        .drain(..usable)
+        .collect::<Vec<_>>()
+        .chunks_exact(2)
+        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    sink.append(rodio::buffer::SamplesBuffer::new(
+        channels,
+        sample_rate,
+        samples,
+    ));
+}
+
+/// 解析流式 WAV 头部，返回 (PCM 起始偏移, 采样率, 声道数)。
+/// 头部字节尚不完整时返回 None，调用方继续累积。
+fn parse_wav_stream_header(bytes: &[u8]) -> Option<(usize, u32, u16)> {
+    if bytes.len() < 12 || !bytes.starts_with(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return None;
+    }
+    let mut offset = 12usize;
+    let mut channels = None;
+    let mut sample_rate = None;
+    let mut bits_per_sample = None;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let chunk_size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
+        if chunk_id == b"fmt " {
+            if offset + 8 + 16 > bytes.len() {
+                return None;
+            }
+            let fmt = &bytes[offset + 8..];
+            channels = Some(u16::from_le_bytes([fmt[2], fmt[3]]));
+            sample_rate = Some(u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]));
+            bits_per_sample = Some(u16::from_le_bytes([fmt[14], fmt[15]]));
+        } else if chunk_id == b"data" {
+            if bits_per_sample != Some(16) {
+                return None; // 非 16-bit PCM 不支持，上层按无效头部报错
+            }
+            return Some((offset + 8, sample_rate?, channels?));
+        }
+        offset = offset.checked_add(8 + chunk_size + (chunk_size & 1))?;
+    }
+    None
 }
 
 async fn api_tts(settings: &AppSettings, text: &str, output: &Path) -> Result<PathBuf, String> {
@@ -596,7 +742,7 @@ async fn play(path: PathBuf) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_audio_extension, normalize_streaming_wav_header};
+    use super::{detect_audio_extension, normalize_streaming_wav_header, parse_wav_stream_header};
 
     #[test]
     fn detects_common_audio_headers() {
@@ -618,6 +764,29 @@ mod tests {
     #[test]
     fn repairs_streaming_wav_placeholder_lengths() {
         let mut wav = Vec::from(&b"RIFF\xFF\xFF\xFF\x7FWAVEfmt \x10\0\0\0\x01\0\x01\0\xC0\x5D\0\0\x80\xBB\0\0\x02\0\x10\0data\xFF\xFF\xFF\x7F\x01\0\x02\0"[..]);
+        normalize_streaming_wav_header(&mut wav).unwrap();
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 40);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 4);
+    }
+
+    // GPT-SoVITS api_v2.py 流式模式：Python wave 模块生成的标准 44 字节头
+    // （32000Hz / 单声道 / 16-bit，data 长度为 0），后接裸 PCM chunk。
+    #[test]
+    fn parses_streaming_wav_header() {
+        let header = b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x00\x7D\0\0\0\xFA\0\0\x02\0\x10\0data\0\0\0\0";
+        assert_eq!(parse_wav_stream_header(header), Some((44, 32000, 1)));
+        // 头部不完整时返回 None
+        assert_eq!(parse_wav_stream_header(&header[..20]), None);
+        // 非 RIFF 返回 None
+        assert_eq!(parse_wav_stream_header(b"not a wav file at all.."), None);
+    }
+
+    #[test]
+    fn normalizes_gpt_sovits_streamed_wav() {
+        let mut wav = Vec::from(
+            &b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x00\x7D\0\0\0\xFA\0\0\x02\0\x10\0data\0\0\0\0"[..],
+        );
+        wav.extend_from_slice(&[1, 0, 2, 0]);
         normalize_streaming_wav_header(&mut wav).unwrap();
         assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 40);
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 4);
