@@ -303,6 +303,8 @@ pub fn toggle_proactive_enabled(conn: &Connection) -> rusqlite::Result<bool> {
         "UPDATE app_settings SET proactive_enabled=? WHERE id=1",
         params![enabled as i32],
     )?;
+    let settings = get_settings(conn, true)?;
+    reset_proactive_schedule(conn, &settings, chrono::Utc::now().timestamp_millis())?;
     Ok(enabled)
 }
 

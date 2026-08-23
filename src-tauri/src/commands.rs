@@ -2,7 +2,7 @@ use crate::db::{self, AppSettings, DbState, Message};
 use crate::{AsrEnvConfig, ConversationState, MemoryEnvConfig, ModelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const NATURAL_SPEECH_RULES: &str = r#"像日常一对一聊天一样自然、口语化，只说角色实际说出口的话。默认回复 1～3 个短句；只有用户明确要求解释、教学或方案时才适度展开，通常不超过 6 句。先直接回应重点，不复述问题，不写总结式套话。禁止用括号、星号或旁白描写动作、表情、神态、心理、语气和场景；禁止舞台说明、角色标签、分析过程及刻意卖萌。"#;
 const ROXY_NAME: &str = "洛琪希";
@@ -339,6 +339,9 @@ pub async fn save_settings(
             .map_err(|e| e.to_string())?;
     }
     drop(conn);
+    if previous_proactive.0 != settings.proactive_enabled {
+        let _ = app.emit("proactive-enabled-changed", settings.proactive_enabled);
+    }
     crate::tool_hook::reconcile_server(&app).await;
     settings.asr_configured = (!settings.asr_app_id.is_empty() || !asr_env.app_id.is_empty())
         && (!settings.asr_api_key.is_empty() || !asr_env.api_key.is_empty())
@@ -770,8 +773,10 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
             .cloned()
             .unwrap_or_default();
         if calls.is_empty() {
+            log_info!("tool audit round done: no tool_calls, plain text response");
             break;
         }
+        log_info!("tool audit round: {} tool call(s)", calls.len());
         messages.push(message);
         for call in calls {
             let id = call
@@ -1068,9 +1073,13 @@ pub async fn list_todos(db_state: State<'_, DbState>) -> Result<Vec<db::Todo>, S
 }
 
 #[tauri::command]
-pub async fn toggle_proactive_enabled(db_state: State<'_, DbState>) -> Result<bool, String> {
-    let conn = db_state.0.lock().await;
-    db::toggle_proactive_enabled(&conn).map_err(|e| e.to_string())
+pub async fn toggle_proactive_enabled(app: AppHandle, db_state: State<'_, DbState>) -> Result<bool, String> {
+    let enabled = {
+        let conn = db_state.0.lock().await;
+        db::toggle_proactive_enabled(&conn).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("proactive-enabled-changed", enabled);
+    Ok(enabled)
 }
 
 #[tauri::command]
