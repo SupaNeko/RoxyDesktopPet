@@ -32,7 +32,7 @@ sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 rand = "0.9"
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [dev-dependencies]
 tempfile = "3"

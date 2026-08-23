@@ -1,7 +1,13 @@
 use serde::Serialize;
-use std::{collections::HashSet, sync::Mutex as StdMutex, thread, time::Duration};
+use std::{collections::HashSet, sync::Mutex as StdMutex, sync::OnceLock, thread, time::Duration};
 use tauri::{AppHandle, Emitter, Manager};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, MSG,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_XBUTTONDOWN, WM_XBUTTONUP,
+};
 
 #[derive(Default)]
 struct InputInner {
@@ -104,13 +110,101 @@ pub fn cancel_capture(state: &GlobalInputState) {
         inner.captured.clear();
     }
 }
-fn current_pressed() -> HashSet<u16> {
-    (1u16..=254)
-        .filter(|vk| !matches!(vk, 0x10 | 0x11 | 0x12))
-        .filter(|vk| unsafe { GetAsyncKeyState(*vk as i32) } < 0)
-        .collect()
+/// 由低级钩子（WH_KEYBOARD_LL / WH_MOUSE_LL）维护的当前按下键集合。
+/// 不用 GetAsyncKeyState 轮询：前台是提权应用/游戏时 UIPI 会让它静默返回 0，
+/// 导致“非焦点时快捷键失效”。低级钩子由系统直接回调，不受前台进程权限影响。
+static PRESSED: OnceLock<StdMutex<HashSet<u16>>> = OnceLock::new();
+
+fn pressed_set() -> &'static StdMutex<HashSet<u16>> {
+    PRESSED.get_or_init(|| StdMutex::new(HashSet::new()))
 }
+
+fn current_pressed() -> HashSet<u16> {
+    pressed_set().lock().map(|set| set.clone()).unwrap_or_default()
+}
+
+fn update_pressed(vk: u16, down: bool) {
+    // 过滤左右不分的通用修饰键，与绑定/捕获逻辑保持一致
+    if matches!(vk, 0x10 | 0x11 | 0x12) {
+        return;
+    }
+    if let Ok(mut set) = pressed_set().lock() {
+        if down {
+            set.insert(vk);
+        } else {
+            set.remove(&vk);
+        }
+    }
+}
+
+unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let info = &*(lparam as *const KBDLLHOOKSTRUCT);
+        let msg = wparam as u32;
+        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            update_pressed(info.vkCode as u16, true);
+        } else if msg == WM_KEYUP || msg == WM_SYSKEYUP {
+            update_pressed(info.vkCode as u16, false);
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let msg = wparam as u32;
+        let vk = match msg {
+            WM_LBUTTONDOWN | WM_LBUTTONUP => Some(0x01),
+            WM_RBUTTONDOWN | WM_RBUTTONUP => Some(0x02),
+            WM_MBUTTONDOWN | WM_MBUTTONUP => Some(0x04),
+            WM_XBUTTONDOWN | WM_XBUTTONUP => {
+                let info = &*(lparam as *const MSLLHOOKSTRUCT);
+                let xbutton = (info.mouseData >> 16) & 0xFFFF;
+                Some(if xbutton == 1 { 0x05 } else { 0x06 })
+            }
+            _ => None,
+        };
+        if let Some(vk) = vk {
+            let down = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN);
+            update_pressed(vk, down);
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+/// 安装全局低级键盘/鼠标钩子。钩子回调在独立线程的消息循环上运行，
+/// 与下方的业务逻辑线程分离，避免模态菜单等阻塞影响输入状态采集。
+fn start_hook_thread() {
+    thread::Builder::new()
+        .name("roxy-input-hooks".into())
+        .spawn(|| unsafe {
+            let keyboard = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(keyboard_hook),
+                std::ptr::null_mut(),
+                0,
+            );
+            let mouse = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                Some(mouse_hook),
+                std::ptr::null_mut(),
+                0,
+            );
+            if keyboard.is_null() || mouse.is_null() {
+                eprintln!("全局输入钩子安装失败，按键说话可能不可用");
+            }
+            let mut msg: MSG = std::mem::zeroed();
+            loop {
+                if GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) <= 0 {
+                    break;
+                }
+            }
+        })
+        .expect("failed to start global input hooks");
+}
+
 pub fn start_listener(app: AppHandle) {
+    start_hook_thread();
     thread::Builder::new()
         .name("roxy-global-input".into())
         .spawn(move || {
