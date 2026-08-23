@@ -165,7 +165,13 @@ pub async fn start(
     let config = device
         .default_input_config()
         .map_err(|e| format!("无法读取麦克风配置：{e}"))?;
+    log_info!(
+        "audio::start: device={device_name}, rate={}, channels={}",
+        config.sample_rate().0,
+        config.channels()
+    );
     let source_rate = config.sample_rate().0;
+    let device_name_log = device_name.clone();
     let channels = config.channels() as usize;
     if state.active.swap(true, Ordering::SeqCst) {
         return Ok(());
@@ -187,6 +193,7 @@ pub async fn start(
                 Ok(v) => v,
                 Err(e) => {
                     active.store(false, Ordering::SeqCst);
+                    log_error!("Silero VAD 初始化失败：{e}");
                     emit(
                         &worker_app,
                         "error",
@@ -306,6 +313,7 @@ pub async fn start(
                 },
                 move |e| {
                     err_active.store(false, Ordering::SeqCst);
+                    log_error!("麦克风流错误：{e}");
                     emit(&err_app, "error", Some(format!("麦克风流错误：{e}")), None);
                 },
                 None,
@@ -322,6 +330,7 @@ pub async fn start(
                 },
                 move |e| {
                     err_active.store(false, Ordering::SeqCst);
+                    log_error!("麦克风流错误：{e}");
                     emit(&err_app, "error", Some(format!("麦克风流错误：{e}")), None);
                 },
                 None,
@@ -338,6 +347,7 @@ pub async fn start(
                 },
                 move |e| {
                     err_active.store(false, Ordering::SeqCst);
+                    log_error!("麦克风流错误：{e}");
                     emit(&err_app, "error", Some(format!("麦克风流错误：{e}")), None);
                 },
                 None,
@@ -360,6 +370,7 @@ pub async fn start(
         format!("无法启动麦克风：{e}")
     })?;
     *state.stream.lock().await = Some(stream);
+    log_info!("audio::start: microphone stream started ({device_name_log})");
     Ok(())
 }
 
@@ -514,6 +525,7 @@ pub async fn finish_push_to_talk(
     Ok(())
 }
 pub async fn stop(state: &VoiceState) {
+    log_info!("audio::stop called");
     state.active.store(false, Ordering::SeqCst);
     *state.stream.lock().await = None;
 }

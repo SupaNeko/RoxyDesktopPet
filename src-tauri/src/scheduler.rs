@@ -4,11 +4,17 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
+        log_info!("scheduler started");
         let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut ticks: u64 = 0;
         loop {
             interval.tick().await;
+            ticks += 1;
             if let Err(error) = tick(&app).await {
-                eprintln!("scheduler tick failed: {error}");
+                log_error!("scheduler tick failed: {error}");
+            }
+            if ticks % 30 == 0 {
+                log_info!("scheduler heartbeat (ticks={ticks}, ~{}s)", ticks * 2);
             }
         }
     });
@@ -22,6 +28,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         db::claim_due_reminder(&mut conn, now).map_err(|e| e.to_string())?
     };
     if let Some(item) = reminder {
+        log_info!("reminder due, claiming todo: {} ({})", item.title, item.todo_id);
         let due = chrono::DateTime::from_timestamp_millis(item.scheduled_at_utc)
             .unwrap_or_default()
             .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
@@ -33,19 +40,25 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         let generated =
             crate::commands::generate_scheduled_message(app, "reminder_due", &prompt).await;
         let (message, error) = match generated {
-            Ok(message) => (message, None),
-            Err(error) => (
-                Message {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    role: "assistant".into(),
-                    content: format!("提醒：{}", item.title),
-                    japanese_text: None,
-                    emotion: Some("calm".into()),
-                    trigger_type: "reminder_due".into(),
-                    created_at: chrono::Utc::now().timestamp_millis(),
-                },
-                Some(error),
-            ),
+            Ok(message) => {
+                log_info!("reminder message generated: {} chars", message.content.chars().count());
+                (message, None)
+            }
+            Err(ref e) => {
+                log_warn!("reminder message generation failed, using fallback: {e}");
+                (
+                    Message {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        role: "assistant".into(),
+                        content: format!("提醒：{}", item.title),
+                        japanese_text: None,
+                        emotion: Some("calm".into()),
+                        trigger_type: "reminder_due".into(),
+                        created_at: chrono::Utc::now().timestamp_millis(),
+                    },
+                    Some(e.clone()),
+                )
+            }
         };
         {
             let conn = db_state.0.lock().await;
@@ -56,6 +69,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         }
         let _ = app.emit("assistant-message", message.clone());
         crate::voice_output::schedule(app.clone(), message);
+        log_info!("reminder delivered (fallback={})", error.is_some());
     }
 
     let proactive_due = {
@@ -64,9 +78,16 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
         db::claim_proactive_due(&conn, &settings, now).map_err(|e| e.to_string())?
     };
     if proactive_due {
-        if let Ok(message) = crate::commands::generate_scheduled_message(app, "companion_tick", "主动和用户说一句自然、低打扰、有陪伴感的话。可以结合最近对话，但不要声称观察到了未提供的信息。").await {
-            let _ = app.emit("assistant-message", message.clone());
-            crate::voice_output::schedule(app.clone(), message);
+        log_info!("proactive message due");
+        match crate::commands::generate_scheduled_message(app, "companion_tick", "主动和用户说一句自然、低打扰、有陪伴感的话。可以结合最近对话，但不要声称观察到了未提供的信息。").await {
+            Ok(message) => {
+                log_info!("proactive message generated: {} chars", message.content.chars().count());
+                let _ = app.emit("assistant-message", message.clone());
+                crate::voice_output::schedule(app.clone(), message);
+            }
+            Err(error) => {
+                log_error!("proactive message generation failed: {error}");
+            }
         }
     }
     Ok(())

@@ -43,9 +43,17 @@ pub async fn reconcile_server(app: &AppHandle) {
         let conn = db.0.lock().await;
         match db::get_settings(&conn, true) {
             Ok(s) => s,
-            Err(_) => return,
+            Err(e) => {
+                log_error!("tool_hook reconcile: 读取设置失败: {e}");
+                return;
+            }
         }
     };
+    log_info!(
+        "tool_hook reconcile: enabled={}, port={}",
+        settings.tool_hook_enabled,
+        settings.tool_hook_port
+    );
     let state = app.state::<ToolHookState>();
     let want = settings.tool_hook_enabled;
     let cfg = Some((
@@ -71,10 +79,11 @@ async fn start_server(app: &AppHandle, settings: &AppSettings) {
     let listener = match hook_server::bind(settings.tool_hook_port).await {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("tool hook server bind failed: {error}");
+            log_error!("tool hook server bind failed: {error}");
             return;
         }
     };
+    log_info!("tool hook server bound on 127.0.0.1:{}", settings.tool_hook_port);
     let app_clone = app.clone();
     let handler: hook_server::EventHandler = Arc::new(move |tool, body| {
         let app = app_clone.clone();
@@ -107,6 +116,7 @@ async fn stop_server(state: &ToolHookState) {
 }
 
 async fn handle_event(app: &AppHandle, tool: &str, body: &str) -> Result<(), String> {
+    log_info!("tool_hook handle_event: tool={tool}, body_len={}", body.len());
     let event: HookEvent = serde_json::from_str(body).map_err(|e| format!("事件 JSON 无效：{e}"))?;
     if event.tool != tool {
         return Err("工具名不匹配".into());
@@ -119,7 +129,7 @@ async fn handle_event(app: &AppHandle, tool: &str, body: &str) -> Result<(), Str
     if !settings.tool_hook_enabled {
         return Ok(());
     }
-    if !matches!(tool, "opencode" | "codex") {
+    if !matches!(tool, "opencode" | "codex" | "kimi") {
         return Ok(());
     }
 

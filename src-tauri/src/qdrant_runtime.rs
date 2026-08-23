@@ -64,18 +64,22 @@ fn runtime_candidates() -> Vec<PathBuf> {
 }
 
 pub async fn ensure(runtime: &QdrantRuntime, url: &str) -> Result<String, String> {
+    log_info!("qdrant_runtime::ensure called (url={url})");
     if healthy(url).await {
         *runtime.status.write().await = "external".into();
+        log_info!("qdrant already healthy, using external runtime");
         return Ok("external".into());
     }
     if !(url.contains("127.0.0.1") || url.contains("localhost")) {
         *runtime.status.write().await = "unavailable".into();
+        log_warn!("qdrant external address unavailable: {url}");
         return Err("外部 Qdrant 地址不可用".into());
     }
     let executable = runtime_candidates()
         .into_iter()
         .find(|path| path.is_file())
         .ok_or("未找到 qdrant.exe")?;
+    log_info!("qdrant executable found: {}", executable.display());
     let runtime_dir = crate::data_dir().join("qdrant_runtime");
     let storage_dir = crate::data_dir().join("qdrant").join("storage");
     let snapshots_dir = crate::data_dir().join("qdrant").join("snapshots");
@@ -107,19 +111,23 @@ pub async fn ensure(runtime: &QdrantRuntime, url: &str) -> Result<String, String
         .map_err(|e| format!("无法启动 qdrant.exe：{e}"))?;
     *runtime.child.lock().await = Some(child);
     *runtime.status.write().await = "starting".into();
+    log_info!("qdrant.exe spawned");
     for _ in 0..30 {
         if healthy(url).await {
             *runtime.status.write().await = "owned".into();
+            log_info!("qdrant ready after health check");
             return Ok("owned".into());
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     shutdown(runtime).await;
     *runtime.status.write().await = "error".into();
+    log_error!("qdrant health check timeout after spawn");
     Err("Qdrant 启动后健康检查超时".into())
 }
 
 pub async fn shutdown(runtime: &QdrantRuntime) {
+    log_info!("qdrant_runtime::shutdown called");
     if let Some(mut child) = runtime.child.lock().await.take() {
         let _ = child.kill().await;
         let _ = child.wait().await;

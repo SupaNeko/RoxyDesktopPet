@@ -157,6 +157,9 @@ pub async fn remember(
         if !response.status().is_success() { return Err(format!("Qdrant upsert 返回 {}", response.status())); }
         Ok::<(),String>(())
     }.await;
+    if let Err(e) = &result {
+        log_warn!("memory::remember embedding failed for id={}: {e}", memory.id);
+    }
     let conn = db_state.0.lock().await;
     db::set_memory_embedding_status(
         &conn,

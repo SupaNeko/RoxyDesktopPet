@@ -245,9 +245,11 @@ pub fn scan_models(data_dir: &Path) -> Result<Vec<VitsModelInfo>, String> {
 }
 
 pub fn schedule(app: AppHandle, message: Message) {
+    let trigger = message.trigger_type.clone();
+    let emotion = message.emotion.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = generate_and_play(&app, &message).await {
-            eprintln!("voice output failed: {error}");
+            log_error!("voice output failed (trigger={trigger}, emotion={:?}): {error}", emotion);
             let _ = app.emit("voice-output-error", error);
         }
     });
@@ -274,6 +276,12 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
         let conn = db.0.lock().await;
         crate::db::get_settings(&conn, true).map_err(|e| e.to_string())?
     };
+    log_info!(
+        "generate_and_play start: mode={}, trigger={}, id={}",
+        settings.voice_output_mode,
+        message.trigger_type,
+        message.id
+    );
     if settings.tts_api_key.is_empty() {
         settings.tts_api_key = app
             .state::<crate::MemoryEnvConfig>()
@@ -342,6 +350,7 @@ async fn gpt_sovits_tts(
         .ok_or("GPT-SoVITS 消息缺少日文文本")?;
     let runtime = app.state::<crate::gpt_sovits::GptSoVitsState>();
     crate::gpt_sovits::ensure(runtime.inner()).await?;
+    log_info!("gpt_sovits_tts: runtime ready, synthesizing {} chars", text.chars().count());
     let folder = match message.emotion.as_deref().unwrap_or("calm") {
         "shy" => "害羞",
         "affectionate" => "撒娇",
@@ -408,6 +417,7 @@ async fn gpt_sovits_tts(
     if let Some(error) = stream_error {
         return Err(error);
     }
+    log_info!("gpt_sovits_tts: stream finished, {} bytes", bytes.len());
     if !bytes.starts_with(b"RIFF") {
         return Err("GPT-SoVITS 返回的不是 WAV".into());
     }

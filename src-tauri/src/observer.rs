@@ -17,8 +17,9 @@ struct ObservationResult {
 
 pub fn schedule(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
+        log_info!("memory observer scheduled");
         if let Err(error) = run(&app).await {
-            eprintln!("memory observer skipped: {error}");
+            log_error!("memory observer skipped: {error}");
         }
     });
 }
@@ -42,6 +43,7 @@ async fn run(app: &AppHandle) -> Result<(), String> {
     if batch.is_empty() {
         return Ok(());
     }
+    log_info!("memory observer processing {} messages", batch.len());
     if !settings.memory_observer_enabled {
         let conn = db_state.0.lock().await;
         db::advance_memory_observer(&conn, batch.last().unwrap().0).map_err(|e| e.to_string())?;

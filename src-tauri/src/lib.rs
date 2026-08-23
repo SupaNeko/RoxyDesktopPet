@@ -1,3 +1,6 @@
+#[macro_use]
+mod logger;
+
 mod asr;
 mod audio;
 mod commands;
@@ -203,7 +206,9 @@ fn save_pet_window_position(
 }
 
 pub fn run() {
+    crate::logger::init();
     let db = db::open(&data_dir().join("chatpet.db")).expect("failed to open ChatPet database");
+    log_info!("数据库已打开：{}", data_dir().join("chatpet.db").display());
     let voice_enabled = db::get_settings(&db, false)
         .ok()
         .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
@@ -240,7 +245,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let state = voice_app.state::<gpt_sovits::GptSoVitsState>();
                     if let Err(error) = gpt_sovits::ensure(state.inner()).await {
-                        eprintln!("GPT-SoVITS startup failed: {error}");
+                        log_error!("GPT-SoVITS startup failed: {error}");
                     }
                 });
             }

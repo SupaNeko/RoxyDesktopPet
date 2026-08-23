@@ -457,6 +457,9 @@ pub async fn send_text_message(
         "user_text",
     )
     .await;
+    if let Err(ref error) = result {
+        log_error!("send_text_message failed: {error}");
+    }
     if result.is_ok() {
         crate::observer::schedule(app.clone());
         crate::voice_output::schedule(app, result.as_ref().unwrap().clone());
@@ -635,6 +638,11 @@ async fn process_message(
     if content.is_empty() {
         return Err("消息不能为空".into());
     }
+    log_info!(
+        "process_message start: trigger_type={}, content_len={}",
+        trigger_type,
+        content.chars().count()
+    );
     let user = Message {
         id: uuid::Uuid::new_v4().to_string(),
         role: "user".into(),
@@ -656,9 +664,13 @@ async fn process_message(
     if model.api_key.is_empty() {
         return Err("未在 .env 中配置 DEEPSEEK_API_KEY".into());
     }
-    let recalled = crate::memory::recall(&memory_config(&settings), &content)
-        .await
-        .unwrap_or_default();
+    let recalled = match crate::memory::recall(&memory_config(&settings), &content).await {
+        Ok(r) => r,
+        Err(e) => {
+            log_warn!("memory recall failed: {e}");
+            Vec::new()
+        }
+    };
     let memory_context = if recalled.is_empty() {
         "无可用长期记忆".into()
     } else {
@@ -679,6 +691,10 @@ async fn process_message(
     );
     let client = reqwest::Client::new();
     let reply = request_bilingual_reply(&client, model, &messages, 0.8).await?;
+    log_info!(
+        "process_message llm done: reply_len={}",
+        reply.chinese_text.chars().count()
+    );
     let assistant = Message {
         id: uuid::Uuid::new_v4().to_string(),
         role: "assistant".into(),
@@ -699,12 +715,13 @@ async fn process_message(
 fn schedule_tool_audit(app: AppHandle, source_message_id: String) {
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_tool_audit(&app, &source_message_id).await {
-            eprintln!("hidden tool audit failed: {error}");
+            log_error!("hidden tool audit failed: {error}");
         }
     });
 }
 
 async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), String> {
+    log_info!("tool audit start: source={source_message_id}");
     let conversation = app.state::<ConversationState>();
     let _guard = conversation.0.lock().await;
     let db_state = app.state::<DbState>();
@@ -855,6 +872,9 @@ pub async fn process_voice_text(app: AppHandle, content: String) -> Result<Messa
         "user_voice",
     )
     .await;
+    if let Err(ref error) = result {
+        log_error!("process_voice_text failed: {error}");
+    }
     if result.is_ok() {
         crate::observer::schedule(app.clone());
         crate::voice_output::schedule(app, result.as_ref().unwrap().clone());
@@ -871,6 +891,7 @@ pub async fn generate_scheduled_message(
     let model = app.state::<ModelConfig>();
     let conversation = app.state::<ConversationState>();
     let _guard = conversation.0.lock().await;
+    log_info!("generate_scheduled_message start: trigger_type={trigger_type}");
     if model.api_key.is_empty() {
         return Err("未配置 DeepSeek API Key".into());
     }
@@ -900,6 +921,10 @@ pub async fn generate_scheduled_message(
     };
     let conn = db_state.0.lock().await;
     db::insert_message(&conn, &message).map_err(|e| e.to_string())?;
+    log_info!(
+        "generate_scheduled_message done: trigger_type={trigger_type}, len={}",
+        message.content.chars().count()
+    );
     Ok(message)
 }
 
@@ -913,7 +938,7 @@ pub fn start_gpt_sovits(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let state = app.state::<crate::gpt_sovits::GptSoVitsState>();
         if let Err(error) = crate::gpt_sovits::ensure(state.inner()).await {
-            eprintln!("GPT-SoVITS startup failed: {error}");
+            log_error!("GPT-SoVITS startup failed: {error}");
         }
     });
 }
@@ -967,6 +992,9 @@ pub fn set_push_to_talk_shortcut(
     input: State<'_, crate::global_input::GlobalInputState>,
     tokens: Vec<String>,
 ) -> Result<crate::global_input::CapturedBinding, String> {
+    if !tokens.is_empty() {
+        crate::global_input::ensure_hooks();
+    }
     crate::global_input::set_binding(input.inner(), tokens)
 }
 
@@ -974,6 +1002,7 @@ pub fn set_push_to_talk_shortcut(
 pub fn begin_shortcut_capture(
     input: State<'_, crate::global_input::GlobalInputState>,
 ) -> Result<(), String> {
+    crate::global_input::ensure_hooks();
     crate::global_input::begin_capture(input.inner())
 }
 

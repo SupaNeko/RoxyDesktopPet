@@ -9,6 +9,10 @@ const OPENCODE_MARKER: &str = "// chatpet-hook";
 const CODEX_SCRIPT_FILE: &str = "chatpet-stop.ps1";
 const CODEX_SCRIPT_MARKER: &str = "# chatpet-hook";
 const CODEX_HOOKS_JSON: &str = "hooks.json";
+const KIMI_SCRIPT_FILE: &str = "chatpet-stop.ps1";
+const KIMI_SCRIPT_MARKER: &str = "# chatpet-hook";
+const KIMI_HOOK_BEGIN: &str = "# >>> chatpet hook >>>";
+const KIMI_HOOK_END: &str = "# <<< chatpet hook <<<";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolHookStatus {
@@ -61,6 +65,11 @@ pub fn list_supported(settings: &AppSettings) -> Vec<ToolHookToolInfo> {
             name: "Codex".into(),
             items: vec![item_info("task_done", "任务完成提示", codex_detect(settings))],
         },
+        ToolHookToolInfo {
+            id: "kimi".into(),
+            name: "Kimi".into(),
+            items: vec![item_info("task_done", "任务完成提示", kimi_detect(settings))],
+        },
     ]
 }
 
@@ -75,6 +84,7 @@ pub fn write(tool: &str, item: &str, settings: &AppSettings) -> Result<ToolHookS
     match tool {
         "opencode" => opencode_write(settings),
         "codex" => codex_write(settings),
+        "kimi" => kimi_write(settings),
         _ => Err("不支持的软件".into()),
     }
 }
@@ -86,6 +96,7 @@ pub fn remove(tool: &str, item: &str, _settings: &AppSettings) -> Result<ToolHoo
     match tool {
         "opencode" => opencode_remove(),
         "codex" => codex_remove(),
+        "kimi" => kimi_remove(),
         _ => Err("不支持的软件".into()),
     }
 }
@@ -413,5 +424,135 @@ fn codex_remove() -> Result<ToolHookStatus, String> {
         }
     }
     codex_remove_hooks()?;
+    Ok(ToolHookStatus::not_configured())
+}
+
+// ---------- kimi ----------
+
+fn kimi_dir() -> PathBuf {
+    let code = home_dir().join(".kimi-code");
+    let cli = home_dir().join(".kimi");
+    if code.exists() && !cli.exists() {
+        return code;
+    }
+    cli
+}
+
+fn kimi_script_file() -> PathBuf {
+    kimi_dir().join("hooks").join(KIMI_SCRIPT_FILE)
+}
+
+fn kimi_config_toml() -> PathBuf {
+    kimi_dir().join("config.toml")
+}
+
+fn kimi_script_content(port: u32, token: &str) -> String {
+    format!(
+        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"kimi\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/kimi\" -Method POST -ContentType \"application/json\" -Headers @{{ \"x-chatpet-token\" = \"{token}\" }} -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
+    )
+}
+
+fn kimi_command(script: &Path) -> String {
+    format!(
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        script.display()
+    )
+}
+
+fn kimi_hook_block(script: &Path) -> String {
+    let command = kimi_command(script);
+    format!(
+        "{}\n[[hooks]]\nevent = \"Stop\"\ncommand = '{}'\ntimeout = 30\n{}\n",
+        KIMI_HOOK_BEGIN, command, KIMI_HOOK_END
+    )
+}
+
+fn strip_kimi_hook_block(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_block = false;
+    for line in content.lines() {
+        if line.trim() == KIMI_HOOK_BEGIN {
+            in_block = true;
+            continue;
+        }
+        if line.trim() == KIMI_HOOK_END {
+            in_block = false;
+            continue;
+        }
+        if !in_block {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
+fn kimi_detect(settings: &AppSettings) -> ToolHookStatus {
+    let config = kimi_config_toml();
+    let config_content = std::fs::read_to_string(&config).unwrap_or_default();
+    if !config_content.contains(KIMI_HOOK_BEGIN) {
+        return ToolHookStatus::not_configured();
+    }
+    let script = kimi_script_file();
+    if !script.exists() {
+        return ToolHookStatus::error("config.toml 已配置，但通知脚本缺失");
+    }
+    let Ok(content) = std::fs::read_to_string(&script) else {
+        return ToolHookStatus::error("通知脚本无法读取");
+    };
+    if !content.contains(KIMI_SCRIPT_MARKER) {
+        return ToolHookStatus::error("通知脚本不是桌宠写入（文件已被其它程序占用）");
+    }
+    if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
+        || !content.contains(&format!("\"x-chatpet-token\" = \"{}\"", settings.tool_hook_token))
+    {
+        return ToolHookStatus::needs_update();
+    }
+    ToolHookStatus::configured()
+}
+
+fn kimi_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
+    let script = kimi_script_file();
+    if let Some(parent) = script.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建脚本目录失败：{e}"))?;
+    }
+    if script.exists() {
+        let content = std::fs::read_to_string(&script).unwrap_or_default();
+        if !content.contains(KIMI_SCRIPT_MARKER) {
+            backup_existing(&script)?;
+        }
+    }
+    let content = kimi_script_content(settings.tool_hook_port, &settings.tool_hook_token);
+    write_file_atomic(&script, &content)?;
+
+    let config = kimi_config_toml();
+    if config.exists() {
+        backup_existing(&config)?;
+    }
+    let existing = std::fs::read_to_string(&config).unwrap_or_default();
+    let stripped = strip_kimi_hook_block(&existing);
+    let new_content = format!("{stripped}{}", kimi_hook_block(&script));
+    write_file_atomic(&config, &new_content)?;
+    Ok(ToolHookStatus::configured())
+}
+
+fn kimi_remove() -> Result<ToolHookStatus, String> {
+    let script = kimi_script_file();
+    if script.exists() {
+        std::fs::remove_file(&script).map_err(|e| format!("删除通知脚本失败：{e}"))?;
+        if let Some(backup) = latest_backup(&script) {
+            std::fs::rename(&backup, &script).map_err(|e| format!("恢复原脚本失败：{e}"))?;
+        }
+    }
+    let config = kimi_config_toml();
+    if config.exists() {
+        let existing = std::fs::read_to_string(&config).unwrap_or_default();
+        let stripped = strip_kimi_hook_block(&existing);
+        if stripped.trim().is_empty() {
+            std::fs::remove_file(&config).map_err(|e| format!("删除 config.toml 失败：{e}"))?;
+        } else {
+            write_file_atomic(&config, &stripped)?;
+        }
+    }
     Ok(ToolHookStatus::not_configured())
 }

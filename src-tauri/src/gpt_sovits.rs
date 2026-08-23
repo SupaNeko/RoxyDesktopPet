@@ -210,9 +210,11 @@ pub async fn status(state: &GptSoVitsState) -> VoiceRuntimeStatus {
 }
 
 pub async fn ensure(state: &GptSoVitsState) -> Result<(), String> {
+    log_info!("gpt_sovits::ensure called");
     match ensure_inner(state).await {
         Ok(()) => Ok(()),
         Err(error) => {
+            log_error!("gpt_sovits::ensure failed: {error}");
             let mut inner = state.inner.lock().await;
             inner.status = if error.contains("未检测到 NVIDIA") || error.contains("NVIDIA 驱动")
             {
@@ -236,6 +238,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
         let mut inner = state.inner.lock().await;
         inner.status = "available".into();
         inner.detail = format!("GPT-SoVITS 已就绪，GPU：{gpu}");
+        log_info!("gpt_sovits already available (gpu={gpu})");
         return Ok(());
     }
 
@@ -289,6 +292,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
         );
         inner.status = "starting".into();
         inner.detail = format!("正在加载 v2ProPlus 模型，{cuda}");
+        log_info!("gpt_sovits python spawned (cuda={cuda})");
     }
 
     for _ in 0..240 {
@@ -296,6 +300,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
             let mut inner = state.inner.lock().await;
             inner.status = "available".into();
             inner.detail = format!("GPT-SoVITS 已就绪，GPU：{gpu}");
+            log_info!("gpt_sovits ready after health check (gpu={gpu})");
             return Ok(());
         }
         {
@@ -306,6 +311,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
                     inner.status = "error".into();
                     inner.detail =
                         format!("GPT-SoVITS 启动失败（{exit}），请查看 data\\logs\\gpt-sovits.log");
+                    log_error!("gpt_sovits python exited during startup: {exit}");
                     return Err(inner.detail.clone());
                 }
             }
@@ -324,6 +330,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
 }
 
 pub async fn shutdown(state: &GptSoVitsState) {
+    log_info!("gpt_sovits::shutdown called");
     let mut inner = state.inner.lock().await;
     if let Some(child) = inner.child.as_mut() {
         let _ = child.start_kill();
