@@ -111,7 +111,9 @@ if (Test-Path -LiteralPath $Archive) {
 }
 Push-Location $StageRoot
 try {
-    & tar.exe -a -c -f $Archive "voice"
+    # 必须用系统自带的 bsdtar：Git Bash 的 /usr/bin/tar 会把 D:\ 开头的
+    # 路径当成 rsh 远程主机（"Cannot connect to D: resolve failed"）。
+    & (Join-Path $env:SystemRoot "System32\tar.exe") -a -c -f $Archive "voice"
     if ($LASTEXITCODE -ne 0) { throw "Failed to create voice ZIP." }
 } finally {
     Pop-Location
