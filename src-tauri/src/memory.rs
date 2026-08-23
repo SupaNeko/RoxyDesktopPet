@@ -31,7 +31,7 @@ impl MemoryConfig {
             })
             .collect();
         format!(
-            "chatpet_memories_{}_{}",
+            "roxy_memories_{}_{}",
             model.trim_matches('_'),
             self.embedding_dimension
         )

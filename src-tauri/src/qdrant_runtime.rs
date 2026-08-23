@@ -35,6 +35,19 @@ async fn healthy(url: &str) -> bool {
 
 fn runtime_candidates() -> Vec<PathBuf> {
     let mut paths = vec![crate::data_dir().join("qdrant_runtime").join("qdrant.exe")];
+    if cfg!(debug_assertions) {
+        paths.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("qdrant")
+                .join("qdrant.exe"),
+        );
+    } else if let Ok(executable) = std::env::current_exe() {
+        if let Some(root) = executable.parent() {
+            paths.push(root.join("resources").join("qdrant").join("qdrant.exe"));
+            paths.push(root.join("qdrant").join("qdrant.exe"));
+        }
+    }
     if let Ok(output) = std::process::Command::new("where.exe")
         .arg("qdrant.exe")
         .output()

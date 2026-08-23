@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { getCurrentWindow, cursorPosition } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
   import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, X } from 'lucide-svelte';
@@ -33,6 +33,70 @@
   let capturingShortcut = $state(false);
   let shortcutCaptureCommittedAt = 0;
   let todos = $state<Todo[]>([]);
+  // 透明区域点击穿透：轮询光标位置，光标不在可交互元素（宠物不透明像素、气泡、输入框）
+  // 上时让整个窗口忽略鼠标事件，移入时恢复，从而去掉固定窗口带来的“透明遮罩”。
+  let petWindowInteractive = true;
+  let lastPetWindowMove = 0;
+  const petAlphaCache = new Map<string, Promise<ImageData | null>>();
+  function loadPetAlphaData(src: string): Promise<ImageData | null> {
+    let cached = petAlphaCache.get(src);
+    if (!cached) {
+      cached = (async () => {
+        try {
+          const image = new Image();
+          image.src = src;
+          await image.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext('2d', { willReadFrequently: true });
+          if (!context) return null;
+          context.drawImage(image, 0, 0);
+          return context.getImageData(0, 0, canvas.width, canvas.height);
+        } catch {
+          return null;
+        }
+      })();
+      petAlphaCache.set(src, cached);
+    }
+    return cached;
+  }
+  async function cursorHitsPet(x: number, y: number): Promise<boolean> {
+    const pet = document.querySelector<HTMLElement>('.pet');
+    if (!pet) return false;
+    const rect = pet.getBoundingClientRect();
+    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return false;
+    const alpha = await loadPetAlphaData(petImageSrc);
+    if (!alpha) return true; // 像素数据不可用时保守地保持可交互
+    const px = Math.min(alpha.width - 1, Math.floor((x - rect.left) / rect.width * alpha.width));
+    const py = Math.min(alpha.height - 1, Math.floor((y - rect.top) / rect.height * alpha.height));
+    return alpha.data[(py * alpha.width + px) * 4 + 3] > 16;
+  }
+  async function syncPetWindowHitTest(force = false) {
+    if (label !== 'pet' || mousePassthrough) return;
+    const petWindow = getCurrentWindow();
+    // 原生拖拽期间窗口跟随光标，保持可交互避免拖拽被中断
+    let hit = Date.now() - lastPetWindowMove < 200;
+    try {
+      if (!hit) {
+        const [cursor, outer, scaleFactor] = await Promise.all([cursorPosition(), petWindow.outerPosition(), petWindow.scaleFactor()]);
+        const x = (cursor.x - outer.x) / scaleFactor;
+        const y = (cursor.y - outer.y) / scaleFactor;
+        if (x >= 0 && y >= 0) {
+          for (const element of document.querySelectorAll('.speech-bubble, .pet-composer, .mic-indicator')) {
+            const rect = element.getBoundingClientRect();
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) { hit = true; break; }
+          }
+          if (!hit) hit = await cursorHitsPet(x, y);
+        }
+      }
+    } catch {
+      return;
+    }
+    if (!force && hit === petWindowInteractive) return;
+    petWindowInteractive = hit;
+    petWindow.setIgnoreCursorEvents(!hit).catch(() => {});
+  }
   function showBubble(timed = true, emotion?: string | null) {
     bubbleVisible = true;
     if (bubbleTimer !== null) window.clearTimeout(bubbleTimer);
@@ -45,6 +109,7 @@
   onMount(() => {
     if (label === 'pet') Object.values(petImages).forEach((src) => { const image = new Image(); image.src = src; });
     const blockMenu = (event: MouseEvent) => event.preventDefault(); window.addEventListener('contextmenu', blockMenu);
+    const hitTestTimer = label === 'pet' ? window.setInterval(() => { void syncPetWindowHitTest(); }, 50) : null;
     let unlisteners: (() => void)[] = [];
     let menuResizeObserver: ResizeObserver | null = null;
     if (label === 'pet-menu') {
@@ -63,9 +128,9 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { proactiveEnabled=event.payload; settings.proactive_enabled=event.payload; }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; proactiveEnabled=s.proactive_enabled; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; if (!event.payload) { petWindowInteractive=true; void syncPetWindowHitTest(true); } }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { proactiveEnabled=event.payload; settings.proactive_enabled=event.payload; }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('tauri://move', () => { lastPetWindowMove=Date.now(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; proactiveEnabled=s.proactive_enabled; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
-    return () => { window.removeEventListener('contextmenu', blockMenu); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
+    return () => { window.removeEventListener('contextmenu', blockMenu); if (hitTestTimer !== null) window.clearInterval(hitTestTimer); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
     const content = text.trim(); if (!content || busy) return;

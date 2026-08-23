@@ -17,6 +17,7 @@
         "width": 320,
         "height": 410,
         "resizable": false,
+        "maximizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -64,6 +65,9 @@
     "active": true,
     "targets": [
       "nsis"
+    ],
+    "resources": [
+      "resources/qdrant/qdrant.exe"
     ],
     "windows": {
       "nsis": {

@@ -95,7 +95,7 @@ pnpm tauri build
 
 安装包输出到 `src-tauri/target/release/bundle/nsis/`。
 
-项目不使用 Docker 启动 Qdrant。开发时将固定版本的官方 `qdrant.exe` 放入 `data/qdrant_runtime/`；应用会在需要时启动它，并把数据保存在 `data/qdrant/`。也可以通过 `QDRANT_URL` 连接已有的本地 Qdrant 服务。
+项目不使用 Docker 启动 Qdrant。桌宠自带固定版本的 `qdrant.exe`，应用会在需要时自动启动，并把数据保存在 `data/qdrant/`；也可以通过 `QDRANT_URL` 连接已有的 Qdrant 服务。
 
 在已准备好 GPT-SoVITS 官方源码、固定 Python/CUDA 运行时和洛琪希模型的开发机器上，可构建独立语音扩展：
 

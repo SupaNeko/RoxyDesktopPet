@@ -155,26 +155,44 @@ pub fn data_dir() -> PathBuf {
 struct PetWindowPosition {
     x: i32,
     y: i32,
+    #[serde(default)]
+    anchored: bool,
 }
 
 fn pet_window_position_path() -> PathBuf {
     data_dir().join("pet-window-position.json")
 }
 
-fn load_pet_window_position() -> Option<tauri::PhysicalPosition<i32>> {
+fn load_pet_window_position(
+    window: &tauri::WebviewWindow,
+) -> Option<tauri::PhysicalPosition<i32>> {
     let saved = std::fs::read_to_string(pet_window_position_path()).ok()?;
     let position: PetWindowPosition = serde_json::from_str(&saved).ok()?;
-    Some(tauri::PhysicalPosition::new(position.x, position.y))
+    if !position.anchored {
+        return Some(tauri::PhysicalPosition::new(position.x, position.y));
+    }
+    let size = window.outer_size().ok()?;
+    Some(tauri::PhysicalPosition::new(
+        position.x - size.width as i32 / 2,
+        position.y - size.height as i32,
+    ))
 }
 
-fn save_pet_window_position(position: tauri::PhysicalPosition<i32>) {
+fn save_pet_window_position(
+    window: &tauri::WebviewWindow,
+    position: tauri::PhysicalPosition<i32>,
+) {
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
     let path = pet_window_position_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let saved = PetWindowPosition {
-        x: position.x,
-        y: position.y,
+        x: position.x + size.width as i32 / 2,
+        y: position.y + size.height as i32,
+        anchored: true,
     };
     if let Ok(json) = serde_json::to_string(&saved) {
         let _ = std::fs::write(path, json);
@@ -254,12 +272,13 @@ pub fn run() {
             }
 
             if let Some(pet_window) = app.get_webview_window("pet") {
-                if let Some(position) = load_pet_window_position() {
+                if let Some(position) = load_pet_window_position(&pet_window) {
                     let _ = pet_window.set_position(position);
                 }
+                let position_window = pet_window.clone();
                 pet_window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {
-                        save_pet_window_position(*position);
+                        save_pet_window_position(&position_window, *position);
                     }
                 });
                 let _ = pet_window.show();
