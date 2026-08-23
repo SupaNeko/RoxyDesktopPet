@@ -4,11 +4,14 @@ mod commands;
 mod db;
 mod global_input;
 mod gpt_sovits;
+mod hook_server;
 mod memory;
 mod observer;
 mod pet_interaction;
 mod qdrant_runtime;
 mod scheduler;
+mod tool_hook;
+mod tool_hook_config;
 mod voice_output;
 
 use std::{
@@ -225,6 +228,7 @@ pub fn run() {
         .manage(pet_interaction::PetInteractionState::default())
         .manage(ConversationState(Mutex::new(())))
         .manage(voice_output::VoiceOutputState::new(&data_dir()))
+        .manage(tool_hook::ToolHookState::default())
         .setup(move |app| {
             let runtime_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -242,6 +246,11 @@ pub fn run() {
             }
             global_input::start_listener(app.handle().clone());
             scheduler::start(app.handle().clone());
+
+            let hook_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tool_hook::reconcile_server(&hook_app).await;
+            });
 
             if let Some(settings_window) = app.get_webview_window("settings") {
                 let window_to_hide = settings_window.clone();
@@ -386,6 +395,10 @@ pub fn run() {
             commands::scan_vits_models,
             commands::test_voice_output,
             commands::start_gpt_sovits,
+            commands::list_tool_hook_support,
+            commands::write_tool_hook_config,
+            commands::remove_tool_hook_config,
+            commands::test_tool_hook,
             pet_interaction::set_mouse_passthrough,
             pet_interaction::get_mouse_passthrough
         ])

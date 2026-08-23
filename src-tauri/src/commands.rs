@@ -78,6 +78,17 @@ pub struct SaveSettingsRequest {
     pub embedding_dimension: u32,
     pub memory_observer_enabled: bool,
     pub memory_observer_interval: u32,
+    pub tool_hook_enabled: bool,
+    pub tool_hook_mode: String,
+    pub tool_hook_port: u32,
+    pub tool_hook_token_enabled: bool,
+    pub tool_hook_fixed_text: String,
+    pub tool_hook_fixed_voice_text: String,
+    pub tool_hook_include_last_message: bool,
+    pub tool_hook_min_interval_minutes: u32,
+    pub tool_hook_daily_limit: u32,
+    pub tool_hook_debounce_seconds: u32,
+    pub tool_hook_voice_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -177,11 +188,13 @@ pub async fn get_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
+    settings.tool_hook_token.clear();
     Ok(settings)
 }
 
 #[tauri::command]
 pub async fn save_settings(
+    app: AppHandle,
     db_state: State<'_, DbState>,
     model: State<'_, ModelConfig>,
     asr_env: State<'_, AsrEnvConfig>,
@@ -230,6 +243,11 @@ pub async fn save_settings(
         }
     } else {
         request.tts_api_key.trim().into()
+    };
+    let tool_hook_token = if existing.tool_hook_token.is_empty() {
+        uuid::Uuid::new_v4().simple().to_string()
+    } else {
+        existing.tool_hook_token.clone()
     };
     let mut settings = AppSettings {
         pet_name: ROXY_NAME.into(),
@@ -288,6 +306,22 @@ pub async fn save_settings(
         memory_configured: false,
         memory_observer_enabled: request.memory_observer_enabled,
         memory_observer_interval: request.memory_observer_interval.clamp(2, 500),
+        tool_hook_enabled: request.tool_hook_enabled,
+        tool_hook_mode: if request.tool_hook_mode == "ai" {
+            "ai".into()
+        } else {
+            "fixed".into()
+        },
+        tool_hook_port: request.tool_hook_port.clamp(1, 65535),
+        tool_hook_token,
+        tool_hook_token_enabled: request.tool_hook_token_enabled,
+        tool_hook_fixed_text: request.tool_hook_fixed_text.trim().to_string(),
+        tool_hook_fixed_voice_text: request.tool_hook_fixed_voice_text.trim().to_string(),
+        tool_hook_include_last_message: request.tool_hook_include_last_message,
+        tool_hook_min_interval_minutes: request.tool_hook_min_interval_minutes.clamp(1, 10_080),
+        tool_hook_daily_limit: request.tool_hook_daily_limit.clamp(1, 100),
+        tool_hook_debounce_seconds: request.tool_hook_debounce_seconds.clamp(0, 3600),
+        tool_hook_voice_enabled: request.tool_hook_voice_enabled,
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());
@@ -304,6 +338,8 @@ pub async fn save_settings(
         db::reset_proactive_schedule(&conn, &settings, chrono::Utc::now().timestamp_millis())
             .map_err(|e| e.to_string())?;
     }
+    drop(conn);
+    crate::tool_hook::reconcile_server(&app).await;
     settings.asr_configured = (!settings.asr_app_id.is_empty() || !asr_env.app_id.is_empty())
         && (!settings.asr_api_key.is_empty() || !asr_env.api_key.is_empty())
         && (!settings.asr_api_secret.is_empty() || !asr_env.api_secret.is_empty());
@@ -317,6 +353,7 @@ pub async fn save_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
+    settings.tool_hook_token.clear();
     Ok(settings)
 }
 
@@ -1046,6 +1083,44 @@ pub fn open_app_window(app: AppHandle, label: String) -> Result<(), String> {
         .ok_or_else(|| format!("窗口不存在：{label}"))?;
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_tool_hook_support(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<crate::tool_hook_config::ToolHookToolInfo>, String> {
+    let conn = db_state.0.lock().await;
+    let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+    Ok(crate::tool_hook_config::list_supported(&settings))
+}
+
+#[tauri::command]
+pub async fn write_tool_hook_config(
+    db_state: State<'_, DbState>,
+    tool: String,
+    item: String,
+) -> Result<crate::tool_hook_config::ToolHookStatus, String> {
+    let conn = db_state.0.lock().await;
+    let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+    drop(conn);
+    crate::tool_hook_config::write(&tool, &item, &settings)
+}
+
+#[tauri::command]
+pub async fn remove_tool_hook_config(
+    db_state: State<'_, DbState>,
+    tool: String,
+    item: String,
+) -> Result<crate::tool_hook_config::ToolHookStatus, String> {
+    let conn = db_state.0.lock().await;
+    let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+    drop(conn);
+    crate::tool_hook_config::remove(&tool, &item, &settings)
+}
+
+#[tauri::command]
+pub async fn test_tool_hook(app: AppHandle, tool: String) -> Result<(), String> {
+    crate::tool_hook::test_event(&app, &tool).await
 }
 
 #[cfg(test)]

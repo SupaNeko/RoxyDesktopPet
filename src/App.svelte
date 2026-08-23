@@ -4,11 +4,11 @@
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
   import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough } from './lib/api';
-  import type { AppSettings, Message, RuntimeStatus, Todo, VoiceStatus } from './lib/types';
+  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook } from './lib/api';
+  import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
-  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30 });
+  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true });
   let runtime = $state<RuntimeStatus | null>(null), messages = $state<Message[]>([]);
   let text = $state(''), error = $state('');
   let busy = $state(false), bubbleVisible = $state(false), composerVisible = $state(false), saved = $state(false);
@@ -43,6 +43,27 @@
   let capturingShortcut = $state(false);
   let shortcutCaptureCommittedAt = 0;
   let todos = $state<Todo[]>([]);
+  let settingsTab = $state<'general' | 'toolhook'>('general');
+  let toolHookTools = $state<ToolHookToolInfo[]>([]);
+  let toolHookToolId = $state('opencode');
+  let toolHookBusy = $state('');
+  let toolHookTesting = $state(false);
+  const toolHookTool = $derived(toolHookTools.find((t) => t.id === toolHookToolId));
+  async function loadToolHookSupport() {
+    try { toolHookTools = await listToolHookSupport(); } catch (e) { error = String(e); }
+  }
+  async function writeHook(itemId: string) {
+    toolHookBusy = itemId; error = '';
+    try { settings = await saveSettings(settings); await writeToolHookConfig(toolHookToolId, itemId); await loadToolHookSupport(); } catch (e) { error = String(e); } finally { toolHookBusy = ''; }
+  }
+  async function removeHook(itemId: string) {
+    toolHookBusy = itemId; error = '';
+    try { settings = await saveSettings(settings); await removeToolHookConfig(toolHookToolId, itemId); await loadToolHookSupport(); } catch (e) { error = String(e); } finally { toolHookBusy = ''; }
+  }
+  async function testHook() {
+    toolHookTesting = true; error = '';
+    try { settings = await saveSettings(settings); await testToolHook(toolHookToolId); } catch (e) { error = String(e); } finally { toolHookTesting = false; }
+  }
   // 透明区域点击穿透：轮询光标位置，光标不在可交互元素（宠物不透明像素、气泡、输入框）
   // 上时让整个窗口忽略鼠标事件，移入时恢复，从而去掉固定窗口带来的“透明遮罩”。
   let petWindowInteractive = true;
@@ -144,6 +165,7 @@
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
     Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; if (!event.payload) { petWindowInteractive=true; void syncPetWindowHitTest(true); } }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { proactiveEnabled=event.payload; settings.proactive_enabled=event.payload; }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('tauri://move', () => { lastPetWindowMove=Date.now(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; proactiveEnabled=s.proactive_enabled; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
+    if (label === 'settings') loadToolHookSupport();
     return () => { window.removeEventListener('contextmenu', blockMenu); if (hitTestTimer !== null) window.clearInterval(hitTestTimer); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
@@ -201,6 +223,11 @@
 {:else if label === 'settings'}
   <main class="settings-page">
     <header><span>CHATPET</span><h1>设置</h1></header>
+    <nav class="settings-tabs">
+      <button class:on={settingsTab === 'general'} onclick={() => settingsTab = 'general'}>常规</button>
+      <button class:on={settingsTab === 'toolhook'} onclick={() => { settingsTab = 'toolhook'; loadToolHookSupport(); }}>编程联动</button>
+    </nav>
+    {#if settingsTab === 'general'}
     <section><h2>角色</h2>
       <label>如何称呼你<input bind:value={settings.user_name} /></label>
       <label>角色图片大小 <span class="range-value">{petImageSize}%</span><input class="size-slider" type="range" min="60" max="150" step="1" value={petImageSize} oninput={(event) => updatePetImageSize(Number(event.currentTarget.value))} /></label>
@@ -276,6 +303,62 @@
         {/if}
       </div>
     </section>
+    {:else}
+    <section><h2>编程联动提醒</h2>
+      <button class="option" class:on={settings.tool_hook_enabled} onclick={() => settings.tool_hook_enabled = !settings.tool_hook_enabled}>
+        <span><strong>启用编程联动提醒</strong><small>{settings.tool_hook_enabled ? '监听已接入编程工具的任务完成事件并主动提醒' : '已关闭'}</small></span>
+      </button>
+      <label>软件
+        <select bind:value={toolHookToolId} onchange={() => loadToolHookSupport()}>
+          {#each toolHookTools as tool}<option value={tool.id}>{tool.name}</option>{/each}
+        </select>
+      </label>
+      {#each toolHookTool?.items ?? [] as item (item.id)}
+        <div class="tool-hook-item">
+          <div class="tool-hook-row"><strong>{item.label}</strong><span class="status-badge" class:configured={item.status === 'configured'} class:needs_update={item.status === 'needs_update'} class:error={item.status === 'error'}>{item.status === 'configured' ? '已配置' : item.status === 'needs_update' ? '需更新' : item.status === 'error' ? '异常' : '未配置'}</span></div>
+          <p class="note">{item.detail}</p>
+          <div class="tool-hook-actions">
+            <button type="button" class="test-button" onclick={() => writeHook(item.id)} disabled={toolHookBusy === item.id || item.status === 'configured'}>一键配置</button>
+            <button type="button" class="ghost-button" onclick={() => removeHook(item.id)} disabled={toolHookBusy === item.id || item.status === 'not_configured'}>删除配置</button>
+          </div>
+        </div>
+      {/each}
+      <p class="note">一键配置会写入该软件的 hook 配置，删除配置会恢复原状。写入后需重启对应软件生效（Codex 首次还需在 /hooks 里信任一次）。</p>
+    </section>
+    <section><h2>提醒方式</h2>
+      <div class="voice-modes">
+        <label><input type="radio" bind:group={settings.tool_hook_mode} value="fixed" />固定提示（不调用 AI）</label>
+        <label><input type="radio" bind:group={settings.tool_hook_mode} value="ai" />消息提示（AI 动态生成）</label>
+      </div>
+      {#if settings.tool_hook_mode === 'fixed'}
+        <label>固定提示文本<textarea bind:value={settings.tool_hook_fixed_text} placeholder={'支持 {tool} {project} 占位符'}></textarea></label>
+        <label>语音文本（日文，GPT-SoVITS 用）<input bind:value={settings.tool_hook_fixed_voice_text} placeholder="可留空" /></label>
+      {:else}
+        <button class="option" class:on={settings.tool_hook_include_last_message} onclick={() => settings.tool_hook_include_last_message = !settings.tool_hook_include_last_message}>
+          <span><strong>附带最后一条助手消息摘要</strong><small>{settings.tool_hook_include_last_message ? 'AI 会参考该摘要生成提示' : '仅提供工具与项目信息，更保守'}</small></span>
+        </button>
+      {/if}
+      <button class="option" class:on={settings.tool_hook_voice_enabled} onclick={() => settings.tool_hook_voice_enabled = !settings.tool_hook_voice_enabled}>
+        <span><strong>语音播报</strong><small>{settings.tool_hook_voice_enabled ? '提示同时朗读' : '仅显示气泡'}</small></span>
+      </button>
+    </section>
+    <section><h2>通知策略</h2>
+      <div class="interval-grid">
+        <label>提醒间隔（分钟）<input type="number" min="1" max="10080" bind:value={settings.tool_hook_min_interval_minutes} /></label>
+        <label>每日上限<input type="number" min="1" max="100" bind:value={settings.tool_hook_daily_limit} /></label>
+        <label>去抖秒数<input type="number" min="0" max="3600" bind:value={settings.tool_hook_debounce_seconds} /></label>
+      </div>
+      <p class="note">同一工具+项目两次提醒的最短间隔，交互聊天时不会被频繁打扰。去抖用于把多轮连续执行合并为一次提醒。</p>
+    </section>
+    <section><h2>监听</h2>
+      <label>端口<input type="number" min="1" max="65535" bind:value={settings.tool_hook_port} /></label>
+      <button class="option" class:on={settings.tool_hook_token_enabled} onclick={() => settings.tool_hook_token_enabled = !settings.tool_hook_token_enabled}>
+        <span><strong>简单校验（Token）</strong><small>{settings.tool_hook_token_enabled ? '仅接受携带正确 Token 的请求' : '已关闭校验'}</small></span>
+      </button>
+      <button type="button" class="test-button" onclick={testHook} disabled={toolHookTesting}>{toolHookTesting ? '正在模拟…' : '模拟发送一次事件'}</button>
+      <p class="note">修改端口或提示设置后请点击底部「保存」生效。</p>
+    </section>
+    {/if}
     {#if error}<p class="error">{error}</p>{/if}{#if saved}<p class="success">设置已保存</p>{/if}
     <footer><button class="save" onclick={persist}>保存</button></footer>
   </main>
@@ -356,4 +439,18 @@
   .pet-composer button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; color: #fff; background: #9b6047; }
   .pet-composer button[type='button'] { color: #75685c; background: #eee5db; }
   .pet-composer button:disabled { opacity: .35; }
-  .pet-menu, .mic-indicator { pointer-events: auto; }</style>
+  .pet-menu, .mic-indicator { pointer-events: auto; }
+  .settings-tabs { display: flex; gap: 4px; margin: -6px 0 0; border-bottom: 1px solid #dcd1c4; }
+  .settings-tabs button { border: 0; background: transparent; padding: 9px 15px; font-size: 13px; color: #6b5f53; border-bottom: 2px solid transparent; }
+  .settings-tabs button.on { color: #8d482f; border-bottom-color: #9b6047; font-weight: 650; }
+  .tool-hook-item { padding: 12px; border: 1px solid #e1d5c8; border-radius: 12px; background: rgba(255,250,243,.55); margin-bottom: 10px; }
+  .tool-hook-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .tool-hook-row strong { font-size: 13px; }
+  .status-badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; background: #e6ded2; color: #6b5f53; white-space: nowrap; }
+  .status-badge.configured { background: #dfeadd; color: #3c673c; }
+  .status-badge.needs_update { background: #f6e7cf; color: #9a6b1f; }
+  .status-badge.error { background: #f3dddd; color: #803b37; }
+  .tool-hook-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .ghost-button { border: 1px solid #d3c6b8; border-radius: 9px; padding: 8px 13px; color: #5e554d; background: #fffaf3; }
+  .ghost-button:disabled { opacity: .5; cursor: default; }
+  .settings-page select { width: 100%; border: 1px solid #d3c6b8; border-radius: 9px; padding: 9px 10px; color: #39332d; background: #fffaf3; }</style>

@@ -38,6 +38,17 @@ export interface AppSettings {
   memory_configured: boolean;
   memory_observer_enabled: boolean;
   memory_observer_interval: number;
+  tool_hook_enabled: boolean;
+  tool_hook_mode: 'fixed' | 'ai';
+  tool_hook_port: number;
+  tool_hook_token_enabled: boolean;
+  tool_hook_fixed_text: string;
+  tool_hook_fixed_voice_text: string;
+  tool_hook_include_last_message: boolean;
+  tool_hook_min_interval_minutes: number;
+  tool_hook_daily_limit: number;
+  tool_hook_debounce_seconds: number;
+  tool_hook_voice_enabled: boolean;
 }
 
 export interface Message {
@@ -67,3 +78,7 @@ export interface VoiceStatus { state: 'disabled' | 'listening' | 'speaking' | 'r
 export interface VitsModelInfo { name: string; path: string; language: string | null; speakers: string[]; has_config: boolean; }
 
 export interface Todo { id: string; title: string; due_at_utc: number; timezone: string; status: string; created_at: number; }
+
+export interface ToolHookStatus { status: 'not_configured' | 'configured' | 'needs_update' | 'error'; detail: string; }
+export interface ToolHookItemInfo { id: string; label: string; status: string; detail: string; }
+export interface ToolHookToolInfo { id: string; name: string; items: ToolHookItemInfo[]; }

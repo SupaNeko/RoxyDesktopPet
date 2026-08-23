@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, Message, RuntimeStatus, Todo, VitsModelInfo } from './types';
+import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -21,7 +21,8 @@ const demoSettings: AppSettings = {
   proactive_min_minutes: 45,
   proactive_max_minutes: 120,
   proactive_daily_limit: 6,
-  qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30
+  qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30,
+  tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -67,3 +68,8 @@ export async function toggleProactiveEnabled(): Promise<boolean> { return inTaur
 
 export async function setMousePassthrough(enabled: boolean): Promise<void> { if (inTauri()) await invoke('set_mouse_passthrough', { enabled }); }
 export async function getMousePassthrough(): Promise<boolean> { return inTauri() ? invoke('get_mouse_passthrough') : false; }
+
+export async function listToolHookSupport(): Promise<ToolHookToolInfo[]> { return inTauri() ? invoke('list_tool_hook_support') : []; }
+export async function writeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('write_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
+export async function removeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('remove_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
+export async function testToolHook(tool: string): Promise<void> { if (inTauri()) await invoke('test_tool_hook', { tool }); }
