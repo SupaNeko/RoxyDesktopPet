@@ -318,8 +318,8 @@ pub async fn save_settings(
         tool_hook_fixed_text: request.tool_hook_fixed_text.trim().to_string(),
         tool_hook_fixed_voice_text: request.tool_hook_fixed_voice_text.trim().to_string(),
         tool_hook_include_last_message: request.tool_hook_include_last_message,
-        tool_hook_min_interval_minutes: request.tool_hook_min_interval_minutes.clamp(1, 10_080),
-        tool_hook_daily_limit: request.tool_hook_daily_limit.clamp(1, 100),
+        tool_hook_min_interval_minutes: request.tool_hook_min_interval_minutes.clamp(0, 10_080),
+        tool_hook_daily_limit: request.tool_hook_daily_limit.clamp(0, 100),
         tool_hook_debounce_seconds: request.tool_hook_debounce_seconds.clamp(0, 3600),
         tool_hook_voice_enabled: request.tool_hook_voice_enabled,
     };

@@ -133,13 +133,13 @@ async fn handle_event(app: &AppHandle, tool: &str, body: &str) -> Result<(), Str
         }
     );
     let now = chrono::Utc::now().timestamp_millis();
-    let interval_ms = settings.tool_hook_min_interval_minutes.max(1) as i64 * 60_000;
+    let interval_ms = settings.tool_hook_min_interval_minutes as i64 * 60_000;
     let state = app.state::<ToolHookState>();
 
     {
         let last = state.last_notify.lock().await;
         if let Some(prev) = last.get(&key) {
-            if now - prev < interval_ms {
+            if interval_ms > 0 && now - prev < interval_ms {
                 return Ok(());
             }
         }
@@ -151,7 +151,7 @@ async fn handle_event(app: &AppHandle, tool: &str, body: &str) -> Result<(), Str
             daily.0 = today;
             daily.1 = 0;
         }
-        if daily.1 >= settings.tool_hook_daily_limit {
+        if settings.tool_hook_daily_limit > 0 && daily.1 >= settings.tool_hook_daily_limit {
             return Ok(());
         }
     }
@@ -216,16 +216,17 @@ fn fixed_message(settings: &AppSettings, event: &HookEvent) -> Message {
     } else {
         chrono::Local::now().format("%H:%M").to_string()
     };
-    let content = settings
-        .tool_hook_fixed_text
-        .replace("{tool}", &event.tool)
-        .replace("{project}", &project)
-        .replace("{event}", &event.event)
-        .replace("{time}", &time);
+    let render = |text: &str| {
+        text.replace("{tool}", &event.tool)
+            .replace("{project}", &project)
+            .replace("{event}", &event.event)
+            .replace("{time}", &time)
+    };
+    let content = render(&settings.tool_hook_fixed_text);
     let japanese_text = if settings.tool_hook_fixed_voice_text.trim().is_empty() {
         None
     } else {
-        Some(settings.tool_hook_fixed_voice_text.clone())
+        Some(render(&settings.tool_hook_fixed_voice_text))
     };
     Message {
         id: uuid::Uuid::new_v4().to_string(),

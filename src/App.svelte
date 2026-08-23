@@ -344,11 +344,11 @@
     </section>
     <section><h2>通知策略</h2>
       <div class="interval-grid">
-        <label>提醒间隔（分钟）<input type="number" min="1" max="10080" bind:value={settings.tool_hook_min_interval_minutes} /></label>
-        <label>每日上限<input type="number" min="1" max="100" bind:value={settings.tool_hook_daily_limit} /></label>
+        <label>提醒间隔（分钟，0 为无间隔）<input type="number" min="0" max="10080" bind:value={settings.tool_hook_min_interval_minutes} /></label>
+        <label>每日上限（0 为不限）<input type="number" min="0" max="100" bind:value={settings.tool_hook_daily_limit} /></label>
         <label>去抖秒数<input type="number" min="0" max="3600" bind:value={settings.tool_hook_debounce_seconds} /></label>
       </div>
-      <p class="note">同一工具+项目两次提醒的最短间隔，交互聊天时不会被频繁打扰。去抖用于把多轮连续执行合并为一次提醒。</p>
+      <p class="note">提醒间隔为同一工具+项目两次提醒的最短间隔，0 表示每次完成都提醒；每日上限 0 表示不限次数。去抖用于把多轮连续执行合并为一次提醒。</p>
     </section>
     <section><h2>监听</h2>
       <label>端口<input type="number" min="1" max="65535" bind:value={settings.tool_hook_port} /></label>
