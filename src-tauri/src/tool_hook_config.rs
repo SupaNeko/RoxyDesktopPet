@@ -487,6 +487,50 @@ fn strip_kimi_hook_block(content: &str) -> String {
     result
 }
 
+/// 删除 kimi-code 默认生成的顶层 `hooks = []` 空数组行。
+/// 该行与 `[[hooks]]` 数组表冲突，必须先移除才能追加数组表。
+fn strip_hooks_empty_line(content: &str) -> String {
+    let mut result = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !line.starts_with([' ', '\t'])
+            && matches!(
+                trimmed,
+                "hooks = []" | "hooks = [ ]" | "hooks=[]" | "hooks=[ ]"
+            )
+        {
+            continue;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
+fn has_hooks_key(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == "[[hooks]]"
+            || trimmed.starts_with("[hooks]")
+            || trimmed.starts_with("hooks =")
+            || trimmed.starts_with("hooks=")
+    })
+}
+
+/// 检测是否存在与 `[[hooks]]` 数组表冲突的 hooks 定义：
+/// 顶层 `[hooks]` 表、或 `hooks = [...]` 非空数组。`[[hooks]]` 数组表不算冲突。
+fn has_conflicting_hooks(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed == "[[hooks]]" {
+            return false;
+        }
+        trimmed.starts_with("[hooks]")
+            || trimmed.starts_with("hooks =")
+            || trimmed.starts_with("hooks=")
+    })
+}
+
 fn kimi_detect(settings: &AppSettings) -> ToolHookStatus {
     let config = kimi_config_toml();
     let config_content = std::fs::read_to_string(&config).unwrap_or_default();
@@ -531,6 +575,10 @@ fn kimi_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
     }
     let existing = std::fs::read_to_string(&config).unwrap_or_default();
     let stripped = strip_kimi_hook_block(&existing);
+    let stripped = strip_hooks_empty_line(&stripped);
+    if has_conflicting_hooks(&stripped) {
+        return Err("config.toml 存在自定义 hooks 配置，请手动将桌宠 hook 合并到 [[hooks]] 数组".into());
+    }
     let new_content = format!("{stripped}{}", kimi_hook_block(&script));
     write_file_atomic(&config, &new_content)?;
     Ok(ToolHookStatus::configured())
@@ -551,7 +599,12 @@ fn kimi_remove() -> Result<ToolHookStatus, String> {
         if stripped.trim().is_empty() {
             std::fs::remove_file(&config).map_err(|e| format!("删除 config.toml 失败：{e}"))?;
         } else {
-            write_file_atomic(&config, &stripped)?;
+            let restored = if has_hooks_key(&stripped) {
+                stripped
+            } else {
+                format!("hooks = []\n{stripped}")
+            };
+            write_file_atomic(&config, &restored)?;
         }
     }
     Ok(ToolHookStatus::not_configured())
