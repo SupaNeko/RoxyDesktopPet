@@ -264,8 +264,14 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         let stderr = stdout.try_clone().map_err(|e| e.to_string())?;
         let mut command = Command::new(&python);
+        // api_v2.py 及其内部模块（TTS.py / sv.py 等）大量依赖 os.getcwd() 定位
+        // GPT_SoVITS 包和模型路径，官方约定 cwd 必须是 GPT-SoVITS 仓库根目录。
+        let sovits_dir = api
+            .parent()
+            .ok_or("语音扩展 API 路径无效")?
+            .to_path_buf();
         command
-            .current_dir(&root)
+            .current_dir(&sovits_dir)
             .arg(&api)
             .args(["-a", "127.0.0.1", "-p", "9880", "-c"])
             .arg(&config)

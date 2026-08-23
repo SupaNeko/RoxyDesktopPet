@@ -81,13 +81,13 @@ $ConfigRoot = Join-Path $VoiceRoot "config"
 New-Item -ItemType Directory -Force -Path $ConfigRoot | Out-Null
 $Config = @"
 custom:
-  bert_base_path: GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
-  cnhuhbert_base_path: GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-hubert-base
+  bert_base_path: GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
+  cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
   device: cuda
   is_half: true
-  t2s_weights_path: models/roxy/Roxy_Pro.ckpt
+  t2s_weights_path: ../models/roxy/Roxy_Pro.ckpt
   version: v2ProPlus
-  vits_weights_path: models/roxy/Roxy_Pro.pth
+  vits_weights_path: ../models/roxy/Roxy_Pro.pth
 "@
 [IO.File]::WriteAllText((Join-Path $ConfigRoot "tts_infer.yaml"), $Config, [Text.UTF8Encoding]::new($false))
 
