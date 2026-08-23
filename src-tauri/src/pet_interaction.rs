@@ -18,6 +18,10 @@ pub fn set(app: &AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<PetInteractionState>()
         .passthrough
         .store(enabled, Ordering::Relaxed);
+    if enabled {
+        // 穿透开启时桌宠窗口收不到右键，需要全局鼠标钩子来弹菜单
+        crate::global_input::ensure_hooks();
+    }
     let window = app
         .get_webview_window("pet")
         .ok_or_else(|| "找不到桌宠窗口".to_string())?;
