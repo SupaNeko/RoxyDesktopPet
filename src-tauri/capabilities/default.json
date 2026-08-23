@@ -2,6 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default ChatPet window permissions",
-  "windows": ["pet", "settings", "todos"],
-  "permissions": ["core:default", "core:window:allow-start-dragging"]
+  "windows": ["pet", "pet-menu", "settings", "todos"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-ignore-cursor-events"
+  ]
 }

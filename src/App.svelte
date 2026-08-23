@@ -24,6 +24,16 @@
   };
   let petEmotion = $state<PetEmotion>('calm');
   let petImageSrc = $derived(petImages[petEmotion]);
+  // 气泡可见时窗口高度有限，自动缩小宠物显示尺寸适配剩余空间，避免窗口出现滚动条/裁剪
+  let bubbleHeight = $state(0);
+  let petDisplayScale = $derived.by(() => {
+    const desired = Math.min(150, Math.max(60, petImageSize)) / 100;
+    if (!(bubbleVisible || busy || Boolean(error))) return desired;
+    const available = Math.floor(window.innerHeight - 12 - 16 - 2 - bubbleHeight - 1);
+    const fitHeight = available / 198;
+    const fitWidth = (window.innerWidth - 28) / 172;
+    return Math.max(0.2, Math.min(desired, fitHeight, fitWidth));
+  });
   let voice = $state<VoiceStatus>({ state: 'disabled' });
   let microphones = $state<string[]>([]);
   let testingVoice = $state(false);
@@ -95,7 +105,7 @@
     }
     if (!force && hit === petWindowInteractive) return;
     petWindowInteractive = hit;
-    petWindow.setIgnoreCursorEvents(!hit).catch(() => {});
+    petWindow.setIgnoreCursorEvents(!hit).catch((e) => console.warn('setIgnoreCursorEvents 失败:', e));
   }
   function showBubble(timed = true, emotion?: string | null) {
     bubbleVisible = true;
@@ -107,7 +117,11 @@
   async function changeMousePassthrough(enabled: boolean) { await setMousePassthrough(enabled); mousePassthrough = enabled; }
   function updatePetImageSize(value: number) { petImageSize = Math.min(150, Math.max(60, value)); localStorage.setItem('petImageSize', String(petImageSize)); emit('pet-image-size-preview', petImageSize).catch(() => {}); }
   onMount(() => {
-    if (label === 'pet') Object.values(petImages).forEach((src) => { const image = new Image(); image.src = src; });
+    if (label === 'pet') {
+      Object.values(petImages).forEach((src) => { const image = new Image(); image.src = src; });
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+    }
     const blockMenu = (event: MouseEvent) => event.preventDefault(); window.addEventListener('contextmenu', blockMenu);
     const hitTestTimer = label === 'pet' ? window.setInterval(() => { void syncPetWindowHitTest(); }, 50) : null;
     let unlisteners: (() => void)[] = [];
@@ -276,9 +290,9 @@
 {:else}
   <main class="pet-window" data-tauri-drag-region>
     {#if bubbleVisible || busy || error}
-      <div class="speech-bubble"><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
+      <div class="speech-bubble" bind:offsetHeight={bubbleHeight}><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
     {/if}
-    <button class="pet" style={`width:${172 * petImageSize / 100}px;height:${198 * petImageSize / 100}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
+    <button class="pet" style={`width:${172 * petDisplayScale}px;height:${198 * petDisplayScale}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
       <form class="pet-composer" onsubmit={(e) => { e.preventDefault(); submit(); }}>
         <input bind:value={text} onkeydown={(e) => { if (e.key === 'Escape') composerVisible=false; }} placeholder="和洛琪希说点什么…" />
@@ -333,8 +347,8 @@
   .range-value { justify-self: end; margin-top: -20px; color: #9b6047; font-variant-numeric: tabular-nums; }
   .settings-page input.size-slider { padding: 0; accent-color: #9b6047; cursor: pointer; }
   .pet-window { position: relative; pointer-events: none; }
-  .pet { width: 172px; height: 198px; pointer-events: auto; }
-  .speech-bubble { position: relative; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
+  .pet { width: 172px; height: 198px; flex-shrink: 0; pointer-events: auto; }
+  .speech-bubble { position: relative; flex-shrink: 1; min-height: 0; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
   .speech-bubble::after { content: ''; position: absolute; left: 61%; bottom: -13px; width: 22px; height: 22px; border-right: 1px solid rgba(190,177,163,.85); border-bottom: 1px solid rgba(190,177,163,.85); background: #fff; transform: skew(-20deg) rotate(45deg); }
   .speech-bubble p { position: relative; z-index: 1; max-height: 98px; margin: 0; overflow: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
   .pet-composer { position: absolute; z-index: 12; left: 22px; right: 22px; bottom: 76px; display: grid; grid-template-columns: minmax(0,1fr) 34px 34px; gap: 6px; padding: 8px; border: 1px solid #d8cab9; border-radius: 13px; background: rgba(255,250,242,.97); box-shadow: 0 12px 28px rgba(55,40,28,.2); pointer-events: auto; }
