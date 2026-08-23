@@ -114,3 +114,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-gpt-sovits-voice-bundle
 - 探索 GPT-SoVITS 的 CPU 推理支持。
 - 建立更清晰、可靠的应用状态管理。
 - 视素材和效果评估，使用更多帧动画替代当前的简单表情差分。
+
+## 6. 参考
+
+- [GPT-SoVits](https://github.com/RVC-Boss/GPT-SoVITS)
+- Roxy GPT-SoVits[语音模型](https://www.bilibili.com/video/BV1HfF6zNEK8)
+- Roxy [人设参考](https://github.com/umikok7/Roxy-SKILL)
