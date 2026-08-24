@@ -120,75 +120,39 @@ pub fn set_passthrough(app: &AppHandle, enabled: bool) {
 }
 
 #[cfg(windows)]
-struct WindowProcState {
-    original: windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC,
-    layout: Arc<RwLock<HitTestLayout>>,
-}
+struct WindowProcState { layout: Arc<RwLock<HitTestLayout>> }
+#[cfg(windows)] static WINDOW_PROCS: OnceLock<Mutex<HashMap<isize, WindowProcState>>> = OnceLock::new();
+#[cfg(windows)] const PET_SUBCLASS_ID: usize = 0x524F_5859;
+#[cfg(windows)] fn window_procs() -> &'static Mutex<HashMap<isize, WindowProcState>> { WINDOW_PROCS.get_or_init(|| Mutex::new(HashMap::new())) }
 
 #[cfg(windows)]
-static WINDOW_PROCS: OnceLock<Mutex<HashMap<isize, WindowProcState>>> = OnceLock::new();
-
-#[cfg(windows)]
-fn window_procs() -> &'static Mutex<HashMap<isize, WindowProcState>> {
-    WINDOW_PROCS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[cfg(windows)]
-unsafe extern "system" fn pet_wndproc(
-    hwnd: windows_sys::Win32::Foundation::HWND,
-    message: u32,
-    wparam: windows_sys::Win32::Foundation::WPARAM,
-    lparam: windows_sys::Win32::Foundation::LPARAM,
-) -> windows_sys::Win32::Foundation::LRESULT {
-    use windows_sys::Win32::{
-        Foundation::POINT,
-        Graphics::Gdi::ScreenToClient,
-        UI::WindowsAndMessaging::{CallWindowProcW, HTCLIENT, HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST},
-    };
-
-    let state = window_procs().lock().ok().and_then(|states| states.get(&(hwnd as isize)).map(|state| (state.original, state.layout.clone())));
-    let Some((original, layout)) = state else { return 0; };
-
+unsafe extern "system" fn pet_subclass_proc(hwnd: windows_sys::Win32::Foundation::HWND, message: u32, wparam: windows_sys::Win32::Foundation::WPARAM, lparam: windows_sys::Win32::Foundation::LPARAM, _: usize, _: usize) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ScreenToClient, UI::{Shell::{DefSubclassProc, RemoveWindowSubclass}, WindowsAndMessaging::{HTCLIENT, HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST}}};
+    let layout = window_procs().lock().ok().and_then(|states| states.get(&(hwnd as isize)).map(|state| state.layout.clone()));
     if message == WM_NCHITTEST {
-        let mut point = POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 };
-        if ScreenToClient(hwnd, &mut point) != 0 {
-            if let Ok(layout) = layout.read() {
-                let x = point.x as f64;
-                let y = point.y as f64;
-                if layout.passthrough || !layout.interactive.iter().any(|rect| rect.contains(x, y)) && !layout.pet.as_ref().is_some_and(|pet| pet.contains(x, y)) {
-                    return HTTRANSPARENT as isize;
+        if let Some(layout) = layout {
+            let mut point = POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 };
+            if ScreenToClient(hwnd, &mut point) != 0 {
+                if let Ok(layout) = layout.read() {
+                    let x = point.x as f64; let y = point.y as f64;
+                    let interactive = layout.interactive.iter().any(|rect| rect.contains(x, y));
+                    let pet = layout.pet.as_ref().is_some_and(|pet| pet.contains(x, y));
+                    if layout.passthrough || (!interactive && !pet) { return HTTRANSPARENT as isize; }
+                    return HTCLIENT as isize;
                 }
-                return HTCLIENT as isize;
             }
         }
     }
-
-    let result = CallWindowProcW(original, hwnd, message, wparam, lparam);
-    if message == WM_NCDESTROY {
-        if let Ok(mut states) = window_procs().lock() { states.remove(&(hwnd as isize)); }
-    }
-    result
+    if message == WM_NCDESTROY { let _ = RemoveWindowSubclass(hwnd, Some(pet_subclass_proc), PET_SUBCLASS_ID); if let Ok(mut states) = window_procs().lock() { states.remove(&(hwnd as isize)); } }
+    DefSubclassProc(hwnd, message, wparam, lparam)
 }
 
 #[cfg(windows)]
 pub fn install(window: &tauri::WebviewWindow, state: PetHitTestState) -> Result<(), String> {
-    use windows_sys::Win32::{
-        Foundation::HWND,
-        UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC},
-    };
+    use windows_sys::Win32::{Foundation::HWND, UI::Shell::SetWindowSubclass};
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-    window
-        .run_on_main_thread(move || unsafe {
-            let raw_hwnd = hwnd as HWND;
-            let original = SetWindowLongPtrW(raw_hwnd, GWLP_WNDPROC, pet_wndproc as usize as isize);
-            let original = std::mem::transmute::<isize, windows_sys::Win32::UI::WindowsAndMessaging::WNDPROC>(original);
-            if let Ok(mut states) = window_procs().lock() {
-                states.insert(hwnd, WindowProcState { original, layout: state.0 });
-            }
-        })
-        .map_err(|error| error.to_string())?;
+    window.run_on_main_thread(move || unsafe { let raw_hwnd = hwnd as HWND; if SetWindowSubclass(raw_hwnd, Some(pet_subclass_proc), PET_SUBCLASS_ID, 0) != 0 { if let Ok(mut states) = window_procs().lock() { states.insert(hwnd, WindowProcState { layout: state.0 }); } } }).map_err(|error| error.to_string())?;
     Ok(())
 }
-
 #[cfg(not(windows))]
 pub fn install(_: &tauri::WebviewWindow, _: PetHitTestState) -> Result<(), String> { Ok(()) }
