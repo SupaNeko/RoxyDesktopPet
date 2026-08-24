@@ -16,7 +16,7 @@
         "label": "pet",
         "title": "ChatPet",
         "width": 320,
-        "height": 410,
+        "height": 230,
         "resizable": false,
         "maximizable": false,
         "decorations": false,

@@ -21,8 +21,9 @@ mod tool_hook_config;
 mod voice_output;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
+    sync::{Mutex as StdMutex, OnceLock},
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -168,37 +169,72 @@ struct PetWindowPosition {
     anchored: bool,
 }
 
+static PROGRAMMATIC_PET_POSITIONS: OnceLock<StdMutex<VecDeque<tauri::PhysicalPosition<i32>>>> =
+    OnceLock::new();
+
+fn programmatic_pet_positions() -> &'static StdMutex<VecDeque<tauri::PhysicalPosition<i32>>> {
+    PROGRAMMATIC_PET_POSITIONS.get_or_init(|| StdMutex::new(VecDeque::new()))
+}
+
+pub(crate) fn expect_programmatic_pet_move(position: tauri::PhysicalPosition<i32>) {
+    let Ok(mut pending) = programmatic_pet_positions().lock() else {
+        return;
+    };
+    if pending.len() >= 8 {
+        pending.pop_front();
+    }
+    pending.push_back(position);
+}
+
+fn consume_programmatic_pet_move(position: tauri::PhysicalPosition<i32>) -> bool {
+    let Ok(mut pending) = programmatic_pet_positions().lock() else {
+        return false;
+    };
+    let Some(index) = pending.iter().position(|expected| {
+        (position.x - expected.x).abs() <= 2 && (position.y - expected.y).abs() <= 2
+    }) else {
+        // A real drag makes any older expected positions obsolete.
+        pending.clear();
+        return false;
+    };
+    pending.remove(index);
+    true
+}
+
 fn pet_window_position_path() -> PathBuf {
     data_dir().join("pet-window-position.json")
 }
 
 fn load_pet_window_position(window: &tauri::WebviewWindow) -> Option<tauri::PhysicalPosition<i32>> {
-    let path = pet_window_position_path();
-    let saved = std::fs::read_to_string(&path).ok()?;
+    let saved = std::fs::read_to_string(pet_window_position_path()).ok()?;
     let position: PetWindowPosition = serde_json::from_str(&saved).ok()?;
-    if !position.anchored {
-        return Some(tauri::PhysicalPosition::new(position.x, position.y));
+    if position.anchored {
+        let size = window.outer_size().ok()?;
+        return Some(tauri::PhysicalPosition::new(
+            position.x - size.width as i32 / 2,
+            position.y - size.height as i32,
+        ));
     }
 
-    // 兼容旧版底边锚点，只转换一次。之后固定保存物理左上角坐标，窗口高度变化不再导致位置漂移。
-    let size = window.outer_size().ok()?;
-    let migrated = tauri::PhysicalPosition::new(
-        position.x - size.width as i32 / 2,
-        position.y - size.height as i32,
-    );
-    save_pet_window_position(migrated);
+    // Migrate the short-lived top-left format. All new positions use a
+    // bottom-center anchor so changing the bubble height cannot move the pet.
+    let migrated = tauri::PhysicalPosition::new(position.x, position.y);
+    save_pet_window_position(window, migrated);
     Some(migrated)
 }
 
-fn save_pet_window_position(position: tauri::PhysicalPosition<i32>) {
+fn save_pet_window_position(window: &tauri::WebviewWindow, position: tauri::PhysicalPosition<i32>) {
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
     let path = pet_window_position_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let saved = PetWindowPosition {
-        x: position.x,
-        y: position.y,
-        anchored: false,
+        x: position.x + size.width as i32 / 2,
+        y: position.y + size.height as i32,
+        anchored: true,
     };
     if let Ok(json) = serde_json::to_string(&saved) {
         let _ = std::fs::write(path, json);
@@ -286,11 +322,15 @@ pub fn run() {
                     log_error!("安装宠物原生命中测试失败: {error}");
                 }
                 if let Some(position) = load_pet_window_position(&pet_window) {
+                    expect_programmatic_pet_move(position);
                     let _ = pet_window.set_position(position);
                 }
+                let position_window = pet_window.clone();
                 pet_window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {
-                        save_pet_window_position(*position);
+                        if !consume_programmatic_pet_move(*position) {
+                            save_pet_window_position(&position_window, *position);
+                        }
                     }
                 });
                 let _ = pet_window.show();
