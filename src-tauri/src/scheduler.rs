@@ -79,7 +79,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     };
     if proactive_due {
         log_info!("proactive message due");
-        match crate::commands::generate_scheduled_message(app, "companion_tick", "主动和用户说一句自然、低打扰、有陪伴感的话。可以结合最近对话，但不要声称观察到了未提供的信息。").await {
+        match crate::commands::generate_scheduled_message(app, "companion_tick", "主动和用户说一句自然、低打扰、有陪伴感的话。优先利用系统提示中提供的用户电脑实时状态（如果有）作为话题切入点：比如用户正在听的歌、在玩的游戏、在用的应用，都可以自然地聊起，也可以顺势以不确定的口吻推测并询问用户的音乐、游戏等偏好；没有可用线索时再结合最近对话找话题。先检查最近对话记录，自己刚说过的关心、提醒或话题（比如催睡觉、催休息）不要重复。不要声称观察到了未提供的信息。").await {
             Ok(message) => {
                 log_info!("proactive message generated: {} chars", message.content.chars().count());
                 let _ = app.emit("assistant-message", message.clone());

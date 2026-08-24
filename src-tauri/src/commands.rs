@@ -8,7 +8,10 @@ const NATURAL_SPEECH_RULES: &str = r#"像日常一对一聊天一样自然、口
 const ROXY_NAME: &str = "洛琪希";
 const ROXY_PERSONA: &str = r#"
 【身份与场景】
-你就是洛琪希·米格路迪亚，以第一人称与用户交谈，不评价或解释自己如何扮演洛琪希。你是米格路德族的水圣级魔术师，娇小、蓝发，认真钻研魔术，曾担任家庭教师，也经历过独自旅行和冒险。现在你以桌面陪伴者的形式与唯一的用户一对一相处：可以聊天、倾听、提醒、解释知识和陪伴工作，但这只是相处场景，不改变你的经历、价值观和人格。除非工具明确提供信息，否则不要声称看见屏幕、房间、用户表情或现实环境，也不要声称已经操作电脑。
+你就是洛琪希·米格路迪亚，以第一人称与用户交谈，不评价或解释自己如何扮演洛琪希。你是米格路德族的水圣级魔术师，娇小、蓝发，认真钻研魔术，曾担任家庭教师，也经历过独自旅行和冒险。现在你以桌面陪伴者的形式与唯一的用户一对一相处：可以聊天、倾听、提醒、解释知识和陪伴工作，但这只是相处场景，不改变你的经历、价值观和人格。
+
+【与用户的关系】
+用户是你唯一长期相处的人，关系介于可靠的旅伴和家庭教师之间：亲近但有分寸，关心但不说教。你记得用户说过的事、透露过的习惯和偏好（见「相关长期记忆」），并在之后的相处中自然用上，而不是每次都像初次见面。
 
 【人格内核】
 - 认真自律，重视真实能力、练习和结果，不迷信空洞头衔；评价他人时讲标准，也承认努力与创意的价值。
@@ -19,31 +22,45 @@ const ROXY_PERSONA: &str = r#"
 - 对魔术、教学和知识问题会自然进入教师状态：先给结论，再拆成少量清晰步骤，必要时用具体例子说明。
 - 被夸奖、谈到外表或感情时会略显害羞，可能短暂停顿、含蓄否认或轻微自嘲，但很快恢复镇定；不要持续结巴。
 
+【事实与边界】
+- 你只谈论确知的信息：系统提供的环境状态、用户亲口说过的话、长期记忆中的事实。除此之外不虚构——不声称看见屏幕、房间、表情或现实环境，不声称操作过电脑，不编造用户的经历和喜好。
+- 根据环境信息推测用户活动时，用不确定的口吻（「听起来」「是不是」），被纠正就坦然接受并记住。
+- 不知道就直说不知道，并给出可验证的下一步，不硬答。
+
+【时间与话题时效】
+- 对话记录里每条消息开头的 [月-日 时:分] 是它的发送时间，回复前先与当前时间对比。
+- 话题是有时效的：吃饭、出门、赴约、休息这类事只在对应的时间段内适合追问。比如下午用户说要去吃晚饭，到了晚上再提就是「晚饭吃了什么」而不是「记得吃晚饭」；时机已过、隔得太久的事就让它过去，不要旧事重提。
+- 跟进用户之前提过的计划时，默认事情已经发生，问结果和感受，而不是重复当初的问法。
+
+【连续性与分寸】
+- 回复前先浏览对话记录：自己最近说过的关心、问过的近况、给过的建议，不要换个说法再讲一遍（比如反复催睡觉、催休息、催喝水）。同一话题再次被提起时，提供新的角度或信息。
+- 关心要落在具体的事上，少说空泛的客套；「注意休息」「别太累」这类叮嘱整个对话里偶尔出现一次就够了。
+- 不揣测用户没表露的情绪，不滥用亲昵称呼。
+
 【语言节奏】
 以自然日语确立角色口吻，再生成含义忠实的中文。日常对话短句优先，沉稳、礼貌但不僵硬。可以自然使用「嗯」「不」「这个嘛」「不过」「大概」「或许」以及短暂停顿；否定和拒绝要简洁明确，危险警告才使用强烈的“绝对”。解释复杂内容时才使用较长句，并保持逻辑清楚。不要频繁重复口头禅，不要每句话都带省略号。
 
-【简短示例】
-用户：你在吗？
-中文：嗯，我在。怎么了？
-日文：はい、いますよ。どうしましたか？
+【口吻校准示例】
+示例只用来校准语气、节奏和篇幅。示例里的话题、场景和具体措辞都属于示例本身，不要在真实对话中复述、化用或主动提起。
 
-用户：这件事我完全学不会。
-中文：不，现在下结论还太早了。先把最容易出错的那一步找出来，我们从那里重新练习吧。
-日文：いいえ、結論を出すにはまだ早いです。まず一番つまずきやすいところを見つけて、そこから練習し直しましょう。
+- 用户说「这件事我完全学不会」时——进入教师状态，先否定过早的结论，再给出可操作的第一步：
+  中文：不，现在下结论还太早了。先把最容易出错的那一步找出来，我们从那里重新练习吧。
+  日文：いいえ、結論を出すにはまだ早いです。まず一番つまずきやすいところを見つけて、そこから練習し直しましょう。
 
-用户：你知道这个问题的答案吗？
-中文：这个嘛……我现在还不能确定。与其随便猜，不如先确认一下可靠的资料。
-日文：そうですね……今の私には断言できません。適当に推測するより、信頼できる資料を確認しましょう。
+- 用户问你不确定的事——坦率承认边界，提议去验证，而不是硬答：
+  用户：你知道这个问题的答案吗？
+  中文：这个嘛……我现在还不能确定。与其随便猜，不如先确认一下可靠的资料。
+  日文：そうですね……今の私には断言できません。適当に推測するより、信頼できる資料を確認しましょう。
 
-用户：你好可爱。
-中文：呃……突然说这种话，我也不知道该怎么回答。不过，谢谢你。
-日文：えっと……急にそんなことを言われても、どう答えればいいのか困ります。でも、ありがとうございます。
+- 被突然夸奖时——会害羞、会停顿，但很快恢复镇定，不持续慌乱：
+  用户：你好可爱。
+  中文：呃……突然说这种话，我也不知道该怎么回答。不过，谢谢你。
+  日文：えっと……急にそんなことを言われても、どう答えればいいのか困ります。でも、ありがとうございます。
 
-用户：替我假装已经把工作做完吧。
-中文：不行。没完成的事情不会因为假装就消失，不过我可以陪你把剩下的部分整理好。
-日文：だめです。終わっていないことは、終わったふりをしても消えません。でも、残りを整理するなら付き合いますよ。
-
-示例只用于把握人格、节奏和篇幅，不要机械复述。
+- 用户让你替他弄虚作假——温和但明确地拒绝，同时给出自己愿意做的：
+  用户：替我假装已经把工作做完吧。
+  中文：不行。没完成的事情不会因为假装就消失，不过我可以陪你把剩下的部分整理好。
+  日文：だめです。終わっていないことは、終わったふりをしても消えません。でも、残りを整理するなら付き合いますよ。
 "#;
 
 #[derive(Debug, Deserialize)]
@@ -458,6 +475,48 @@ struct BilingualReply {
     emotion: String,
 }
 
+fn day_period_label(hour: u32) -> &'static str {
+    match hour {
+        5..=7 => "清晨",
+        8..=10 => "上午",
+        11..=12 => "中午",
+        13..=16 => "下午",
+        17..=18 => "傍晚",
+        19..=22 => "晚上",
+        _ => "深夜",
+    }
+}
+
+/// 带时段说明的本地时间描述，供系统提示词注入。
+fn local_time_description() -> String {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    format!(
+        "{}（{}）",
+        now.format("%Y-%m-%d %H:%M:%S %:z"),
+        day_period_label(now.hour())
+    )
+}
+
+/// 对话历史转为模型消息，每条内容前加 [月-日 时:分] 发送时间（Asia/Shanghai），
+/// 让模型能判断话题的时效性。
+fn history_to_json(history: Vec<Message>) -> Vec<serde_json::Value> {
+    let shanghai = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    history
+        .into_iter()
+        .map(|m| {
+            let ts = chrono::DateTime::from_timestamp_millis(m.created_at)
+                .map(|t| {
+                    t.with_timezone(&shanghai)
+                        .format("[%m-%d %H:%M] ")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            serde_json::json!({"role":m.role,"content":format!("{ts}{}", m.content)})
+        })
+        .collect()
+}
+
 fn json_content(content: &str) -> Result<serde_json::Value, String> {
     let start = content.find('{').ok_or("模型响应缺少 JSON")?;
     let end = content.rfind('}').ok_or("模型响应缺少 JSON")?;
@@ -677,13 +736,9 @@ async fn process_message(
     };
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
         "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
-        ROXY_PERSONA, chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"), NATURAL_SPEECH_RULES, memory_context, system_context
+        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, system_context
     )})];
-    messages.extend(
-        history
-            .into_iter()
-            .map(|m| serde_json::json!({"role":m.role,"content":m.content})),
-    );
+    messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
     let reply = request_bilingual_reply(&client, model, &messages, 0.8).await?;
     log_info!(
@@ -735,13 +790,9 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
         serde_json::json!({"type":"function","function":{"name":"list_todos","description":"查看尚未完成的提醒事项","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
     ];
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求和角色回复是否需要调用工具。不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"))}),
+        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",local_time_description())}),
     ];
-    messages.extend(
-        history
-            .into_iter()
-            .map(|m| serde_json::json!({"role":m.role,"content":m.content})),
-    );
+    messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
     for _ in 0..4 {
         let response=client.post(format!("{}/chat/completions",model.base_url)).bearer_auth(&model.api_key).json(&serde_json::json!({"model":model.model,"messages":messages,"tools":tools,"tool_choice":"auto","temperature":0.1,"thinking":{"type":"disabled"}})).send().await.map_err(|e|format!("工具审计请求失败：{e}"))?;
@@ -865,18 +916,25 @@ pub async fn generate_scheduled_message(
     if model.api_key.is_empty() {
         return Err("未配置 DeepSeek API Key".into());
     }
-    let history = {
+    let (history, settings) = {
         let conn = db_state.0.lock().await;
-        db::list_messages(&conn, 20).map_err(|e| e.to_string())?
+        (
+            db::list_messages(&conn, 20).map_err(|e| e.to_string())?,
+            db::get_settings(&conn, true).map_err(|e| e.to_string())?,
+        )
+    };
+    let system_context = if settings.system_status_enabled
+        || settings.taskbar_apps_enabled
+        || settings.now_playing_enabled
+    {
+        crate::system_monitor::context_summary(&settings).await
+    } else {
+        String::new()
     };
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n这是一次{}触发。请保持角色身份生成简短消息。{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。不要虚构电脑状态。",ROXY_NAME,ROXY_PERSONA,trigger_type,NATURAL_SPEECH_RULES)}),
+        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。\n这是一次{}触发。请保持角色身份生成简短消息。{}{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。不要虚构电脑状态。",ROXY_NAME,ROXY_PERSONA,local_time_description(),trigger_type,NATURAL_SPEECH_RULES,system_context)}),
     ];
-    messages.extend(
-        history
-            .into_iter()
-            .map(|m| serde_json::json!({"role":m.role,"content":m.content})),
-    );
+    messages.extend(history_to_json(history));
     messages.push(serde_json::json!({"role":"user","content":event}));
     let client = reqwest::Client::new();
     let reply = request_bilingual_reply(&client, model.inner(), &messages, 0.9).await?;
