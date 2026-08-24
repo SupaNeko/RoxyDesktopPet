@@ -18,6 +18,7 @@ pub fn set(app: &AppHandle, enabled: bool) -> Result<(), String> {
     app.state::<PetInteractionState>()
         .passthrough
         .store(enabled, Ordering::Relaxed);
+    crate::native_hit_test::set_passthrough(app, enabled);
     if enabled {
         // 穿透开启时桌宠窗口收不到右键，需要全局鼠标钩子来弹菜单
         crate::global_input::ensure_hooks();

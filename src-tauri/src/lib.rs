@@ -14,6 +14,7 @@ mod pet_interaction;
 mod qdrant_runtime;
 mod scheduler;
 mod tool_hook;
+mod native_hit_test;
 mod tool_hook_config;
 mod voice_output;
 
@@ -190,6 +191,7 @@ fn save_pet_window_position(
 ) {
     let Ok(size) = window.outer_size() else {
         return;
+
     };
     let path = pet_window_position_path();
     if let Some(parent) = path.parent() {
@@ -231,6 +233,7 @@ pub fn run() {
         .manage(audio::VoiceState::default())
         .manage(global_input::GlobalInputState::default())
         .manage(pet_interaction::PetInteractionState::default())
+        .manage(native_hit_test::PetHitTestState::default())
         .manage(ConversationState(Mutex::new(())))
         .manage(voice_output::VoiceOutputState::new(&data_dir()))
         .manage(tool_hook::ToolHookState::default())
@@ -286,6 +289,9 @@ pub fn run() {
             }
 
             if let Some(pet_window) = app.get_webview_window("pet") {
+                if let Err(error) = native_hit_test::install(&pet_window, app.state::<native_hit_test::PetHitTestState>().inner().clone()) {
+                    log_error!("安装宠物原生命中测试失败: {error}");
+                }
                 if let Some(position) = load_pet_window_position(&pet_window) {
                     let _ = pet_window.set_position(position);
                 }
@@ -405,7 +411,8 @@ pub fn run() {
             commands::remove_tool_hook_config,
             commands::test_tool_hook,
             pet_interaction::set_mouse_passthrough,
-            pet_interaction::get_mouse_passthrough
+            pet_interaction::get_mouse_passthrough,
+            native_hit_test::update_pet_hit_test_layout
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChatPet");

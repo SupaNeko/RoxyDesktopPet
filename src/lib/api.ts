@@ -69,6 +69,18 @@ export async function toggleProactiveEnabled(): Promise<boolean> { return inTaur
 export async function setMousePassthrough(enabled: boolean): Promise<void> { if (inTauri()) await invoke('set_mouse_passthrough', { enabled }); }
 export async function getMousePassthrough(): Promise<boolean> { return inTauri() ? invoke('get_mouse_passthrough') : false; }
 
+export interface PetHitTestRect { x: number; y: number; width: number; height: number; }
+export interface PetHitTestAlphaRun { start: number; end: number; }
+export interface PetHitTestLayout {
+  scaleFactor: number;
+  interactive: PetHitTestRect[];
+  pet: { rect: PetHitTestRect; imageWidth: number; imageHeight: number; rows: PetHitTestAlphaRun[][] } | null;
+  contentHeight: number;
+}
+export async function updatePetHitTestLayout(request: PetHitTestLayout): Promise<void> {
+  if (inTauri()) await invoke('update_pet_hit_test_layout', { request });
+}
+
 export async function listToolHookSupport(): Promise<ToolHookToolInfo[]> { return inTauri() ? invoke('list_tool_hook_support') : []; }
 export async function writeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('write_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
 export async function removeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('remove_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }

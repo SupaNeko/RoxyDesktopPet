@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { getCurrentWindow, cursorPosition } from '@tauri-apps/api/window';
+  import { onMount, tick } from 'svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
   import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook } from './lib/api';
+  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout } from './lib/api';
   import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
@@ -23,16 +23,8 @@
   };
   let petEmotion = $state<PetEmotion>('calm');
   let petImageSrc = $derived(petImages[petEmotion]);
-  // 气泡可见时窗口高度有限，自动缩小宠物显示尺寸适配剩余空间，避免窗口出现滚动条/裁剪
-  let bubbleHeight = $state(0);
-  let petDisplayScale = $derived.by(() => {
-    const desired = Math.min(150, Math.max(60, petImageSize)) / 100;
-    if (!(bubbleVisible || busy || Boolean(error))) return desired;
-    const available = Math.floor(window.innerHeight - 12 - 16 - 2 - bubbleHeight - 1);
-    const fitHeight = available / 198;
-    const fitWidth = (window.innerWidth - 28) / 172;
-    return Math.max(0.2, Math.min(desired, fitHeight, fitWidth));
-  });
+  // 气泡出现时扩展窗口，不缩放角色图片。
+  let petDisplayScale = $derived(Math.min(150, Math.max(60, petImageSize)) / 100);
   let voice = $state<VoiceStatus>({ state: 'disabled' });
   let microphones = $state<string[]>([]);
   let testingVoice = $state(false);
@@ -63,79 +55,22 @@
     toolHookTesting = true; error = '';
     try { settings = await saveSettings(settings); await testToolHook(toolHookToolId); } catch (e) { error = String(e); } finally { toolHookTesting = false; }
   }
-  // 透明区域点击穿透：轮询光标位置，光标不在可交互元素（宠物不透明像素、气泡、输入框）
-  // 上时让整个窗口忽略鼠标事件，移入时恢复，从而去掉固定窗口带来的“透明遮罩”。
-  let petWindowInteractive = true;
-  let lastPetWindowMove = 0;
+  // 原生命中测试：透明像素直接穿透，气泡和输入控件保持可交互。
   const petAlphaCache = new Map<string, Promise<ImageData | null>>();
-  function loadPetAlphaData(src: string): Promise<ImageData | null> {
-    let cached = petAlphaCache.get(src);
-    if (!cached) {
-      cached = (async () => {
-        try {
-          const image = new Image();
-          image.src = src;
-          await image.decode();
-          const canvas = document.createElement('canvas');
-          canvas.width = image.naturalWidth;
-          canvas.height = image.naturalHeight;
-          const context = canvas.getContext('2d', { willReadFrequently: true });
-          if (!context) return null;
-          context.drawImage(image, 0, 0);
-          return context.getImageData(0, 0, canvas.width, canvas.height);
-        } catch {
-          return null;
-        }
-      })();
-      petAlphaCache.set(src, cached);
-    }
-    return cached;
-  }
-  async function cursorHitsPet(x: number, y: number): Promise<boolean> {
-    const pet = document.querySelector<HTMLElement>('.pet');
-    if (!pet) return false;
-    const rect = pet.getBoundingClientRect();
-    if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return false;
-    const alpha = await loadPetAlphaData(petImageSrc);
-    if (!alpha) return true; // 像素数据不可用时保守地保持可交互
-    const px = Math.min(alpha.width - 1, Math.floor((x - rect.left) / rect.width * alpha.width));
-    const py = Math.min(alpha.height - 1, Math.floor((y - rect.top) / rect.height * alpha.height));
-    return alpha.data[(py * alpha.width + px) * 4 + 3] > 16;
-  }
-  async function syncPetWindowHitTest(force = false) {
-    if (label !== 'pet' || mousePassthrough) return;
-    const petWindow = getCurrentWindow();
-    // 原生拖拽期间窗口跟随光标，保持可交互避免拖拽被中断
-    let hit = Date.now() - lastPetWindowMove < 200;
-    try {
-      if (!hit) {
-        const [cursor, outer, scaleFactor] = await Promise.all([cursorPosition(), petWindow.outerPosition(), petWindow.scaleFactor()]);
-        const x = (cursor.x - outer.x) / scaleFactor;
-        const y = (cursor.y - outer.y) / scaleFactor;
-        if (x >= 0 && y >= 0) {
-          for (const element of document.querySelectorAll('.speech-bubble, .pet-composer, .mic-indicator')) {
-            const rect = element.getBoundingClientRect();
-            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) { hit = true; break; }
-          }
-          if (!hit) hit = await cursorHitsPet(x, y);
-        }
-      }
-    } catch {
-      return;
-    }
-    if (!force && hit === petWindowInteractive) return;
-    petWindowInteractive = hit;
-    petWindow.setIgnoreCursorEvents(!hit).catch((e) => console.warn('setIgnoreCursorEvents 失败:', e));
-  }
-  function showBubble(timed = true, emotion?: string | null) {
+  let hitTestSyncQueued = false, hitTestSyncInFlight = false, lastHitTestLayout = '';
+  function loadPetAlphaData(src: string): Promise<ImageData | null> { let cached = petAlphaCache.get(src); if (!cached) { cached = (async () => { try { const image = new Image(); image.src = src; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight; const context = canvas.getContext('2d', { willReadFrequently: true }); if (!context) return null; context.drawImage(image, 0, 0); return context.getImageData(0, 0, canvas.width, canvas.height); } catch { return null; } })(); petAlphaCache.set(src, cached); } return cached; }
+  function alphaRuns(image: ImageData): { start: number; end: number }[][] { return Array.from({ length: image.height }, (_, y) => { const runs: { start: number; end: number }[] = []; let start = -1; for (let x = 0; x < image.width; x++) { const opaque = image.data[(y * image.width + x) * 4 + 3] > 16; if (opaque && start < 0) start = x; if (!opaque && start >= 0) { runs.push({ start, end: x }); start = -1; } } if (start >= 0) runs.push({ start, end: image.width }); return runs; }); }
+  function schedulePetHitTestLayout() { if (label !== 'pet' || hitTestSyncQueued) return; hitTestSyncQueued = true; requestAnimationFrame(async () => { hitTestSyncQueued = false; if (hitTestSyncInFlight) { schedulePetHitTestLayout(); return; } hitTestSyncInFlight = true; try { await syncPetHitTestLayout(); } finally { hitTestSyncInFlight = false; } }); }
+  async function syncPetHitTestLayout() { if (label !== 'pet') return; await tick(); const root = document.querySelector<HTMLElement>('.pet-window'), pet = document.querySelector<HTMLElement>('.pet'); if (!root || !pet) return; const rootRect = root.getBoundingClientRect(); const rect = (element: Element) => { const bounds = element.getBoundingClientRect(); return { x: bounds.left - rootRect.left, y: bounds.top - rootRect.top, width: bounds.width, height: bounds.height }; }; const interactive = [...document.querySelectorAll('.speech-bubble, .pet-composer, .mic-indicator')].map(rect); const image = await loadPetAlphaData(petImageSrc); const petMask = image ? { rect: rect(pet), imageWidth: image.width, imageHeight: image.height, rows: alphaRuns(image) } : { rect: rect(pet), imageWidth: 1, imageHeight: 1, rows: [[{ start: 0, end: 1 }]] }; const contentHeight = Math.max(230, Math.ceil(root.scrollHeight + 2)), scaleFactor = window.devicePixelRatio || 1; const signature = JSON.stringify({ scaleFactor, interactive, pet: petMask.rect, image: petImageSrc, contentHeight, passthrough: mousePassthrough }); if (signature === lastHitTestLayout) return; lastHitTestLayout = signature; try { await updatePetHitTestLayout({ scaleFactor, interactive, pet: petMask, contentHeight }); } catch (e) { console.warn('同步原生命中区域失败:', e); } }  function showBubble(timed = true, emotion?: string | null) {
     bubbleVisible = true;
     if (bubbleTimer !== null) window.clearTimeout(bubbleTimer);
     petEmotion = emotion && emotion in petImages ? emotion as PetEmotion : 'calm';
-    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
+    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
+    schedulePetHitTestLayout();
   }
-  function openComposer() { if (!mousePassthrough) { composerVisible = true; requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.pet-composer input')?.focus()); } }
+  function openComposer() { if (!mousePassthrough) { composerVisible = true; requestAnimationFrame(() => { document.querySelector<HTMLInputElement>('.pet-composer input')?.focus(); schedulePetHitTestLayout(); }); } }
   async function changeMousePassthrough(enabled: boolean) { await setMousePassthrough(enabled); mousePassthrough = enabled; }
-  function updatePetImageSize(value: number) { petImageSize = Math.min(150, Math.max(60, value)); localStorage.setItem('petImageSize', String(petImageSize)); emit('pet-image-size-preview', petImageSize).catch(() => {}); }
+  function updatePetImageSize(value: number) { petImageSize = Math.min(150, Math.max(60, value)); localStorage.setItem('petImageSize', String(petImageSize)); emit('pet-image-size-preview', petImageSize).catch(() => {}); schedulePetHitTestLayout(); }
   onMount(() => {
     if (label === 'pet') {
       Object.values(petImages).forEach((src) => { const image = new Image(); image.src = src; });
@@ -143,7 +78,12 @@
       document.body.style.overflow = 'hidden';
     }
     const blockMenu = (event: MouseEvent) => event.preventDefault(); window.addEventListener('contextmenu', blockMenu);
-    const hitTestTimer = label === 'pet' ? window.setInterval(() => { void syncPetWindowHitTest(); }, 50) : null;
+    let petResizeObserver: ResizeObserver | null = null;
+    if (label === 'pet') {
+      const petRoot = document.querySelector<HTMLElement>('.pet-window');
+      if (petRoot) { petResizeObserver = new ResizeObserver(schedulePetHitTestLayout); petResizeObserver.observe(petRoot); }
+      schedulePetHitTestLayout();
+    }
     let unlisteners: (() => void)[] = [];
     let menuResizeObserver: ResizeObserver | null = null;
     if (label === 'pet-menu') {
@@ -162,14 +102,14 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; if (!event.payload) { petWindowInteractive=true; void syncPetWindowHitTest(true); } }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('tauri://move', () => { lastPetWindowMove=Date.now(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; localStorage.setItem('voiceInputMode', event.payload); }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); localStorage.setItem('pushToTalkTokens', JSON.stringify(pushToTalkTokens)); localStorage.setItem('pushToTalkLabel', pushToTalkLabel); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
     if (label === 'settings') loadToolHookSupport();
-    return () => { window.removeEventListener('contextmenu', blockMenu); if (hitTestTimer !== null) window.clearInterval(hitTestTimer); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
+    return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
     const content = text.trim(); if (!content || busy) return;
-    text = ''; composerVisible = false; error = ''; messages.push({ id: crypto.randomUUID(), role: 'user', content, trigger_type: 'user_text', created_at: Date.now() }); busy = true; showBubble(false);
+    text = ''; composerVisible = false; schedulePetHitTestLayout(); error = ''; messages.push({ id: crypto.randomUUID(), role: 'user', content, trigger_type: 'user_text', created_at: Date.now() }); busy = true; showBubble(false);
     try { const reply = await sendMessage(content); messages.push(reply); showBubble(true, reply.emotion); } catch (e) { error = String(e); showBubble(); } finally { busy = false; }
   }
   async function persist() {
@@ -372,14 +312,14 @@
 {:else}
   <main class="pet-window" data-tauri-drag-region>
     {#if bubbleVisible || busy || error}
-      <div class="speech-bubble" bind:offsetHeight={bubbleHeight}><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
+      <div class="speech-bubble" ><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
     {/if}
     <button class="pet" style={`width:${172 * petDisplayScale}px;height:${198 * petDisplayScale}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
       <form class="pet-composer" onsubmit={(e) => { e.preventDefault(); submit(); }}>
-        <input bind:value={text} onkeydown={(e) => { if (e.key === 'Escape') composerVisible=false; }} placeholder="和洛琪希说点什么…" />
+        <input bind:value={text} onkeydown={(e) => { if (e.key === 'Escape') { composerVisible=false; schedulePetHitTestLayout(); } }} placeholder="和洛琪希说点什么…" />
         <button disabled={!text.trim() || busy} aria-label="发送"><Send size={16} /></button>
-        <button type="button" aria-label="关闭输入" onclick={() => composerVisible=false}><X size={16} /></button>
+        <button type="button" aria-label="关闭输入" onclick={() => { composerVisible=false; schedulePetHitTestLayout(); }}><X size={16} /></button>
       </form>
     {/if}
     {#if voice.state !== 'disabled'}<i class="mic-indicator" class:speaking={voice.state === 'speaking'} title={voice.detail || voice.state}></i>{/if}
@@ -430,9 +370,9 @@
   .settings-page input.size-slider { padding: 0; accent-color: #9b6047; cursor: pointer; }
   .pet-window { position: relative; pointer-events: none; }
   .pet { width: 172px; height: 198px; flex-shrink: 0; pointer-events: auto; }
-  .speech-bubble { position: relative; flex-shrink: 1; min-height: 0; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
+  .speech-bubble { position: relative; flex-shrink: 0; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
   .speech-bubble::after { content: ''; position: absolute; left: 61%; bottom: -13px; width: 22px; height: 22px; border-right: 1px solid rgba(190,177,163,.85); border-bottom: 1px solid rgba(190,177,163,.85); background: #fff; transform: skew(-20deg) rotate(45deg); }
-  .speech-bubble p { position: relative; z-index: 1; max-height: 98px; margin: 0; overflow: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+  .speech-bubble p { position: relative; z-index: 1; margin: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
   .pet-composer { position: absolute; z-index: 12; left: 22px; right: 22px; bottom: 76px; display: grid; grid-template-columns: minmax(0,1fr) 34px 34px; gap: 6px; padding: 8px; border: 1px solid #d8cab9; border-radius: 13px; background: rgba(255,250,242,.97); box-shadow: 0 12px 28px rgba(55,40,28,.2); pointer-events: auto; }
   .pet-composer input { min-width: 0; border: 1px solid #ddd0c0; border-radius: 8px; padding: 8px 10px; outline: none; background: #fff; }
   .pet-composer button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; color: #fff; background: #9b6047; }
