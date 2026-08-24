@@ -703,7 +703,7 @@ async fn translate(app: &AppHandle, settings: &AppSettings, text: &str) -> Resul
     let memories = {
         let db = app.state::<DbState>();
         let conn = db.0.lock().await;
-        crate::db::list_memories(&conn)
+        crate::memory_store::list_active(&conn, 30)
             .map_err(|e| e.to_string())?
             .into_iter()
             .take(30)

@@ -48,7 +48,7 @@ export async function sendMessage(content: string): Promise<Message> {
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
-  if (!inTauri()) return { database_ready: true, llm_configured: false, vits_status: 'not_configured', memory_status: 'not_configured', microphone_status: 'disabled', qdrant_runtime_status: 'not_started', voice_hardware_status: 'unsupported', voice_hardware_detail: '仅支持 NVIDIA GPU', voice_gpu: null };
+  if (!inTauri()) return { database_ready: true, llm_configured: false, vits_status: 'not_configured', memory_status: 'not_configured', microphone_status: 'disabled', voice_hardware_status: 'unsupported', voice_hardware_detail: '仅支持 NVIDIA GPU', voice_gpu: null };
   return invoke('get_runtime_status');
 }
 

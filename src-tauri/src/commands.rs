@@ -101,7 +101,6 @@ pub struct RuntimeStatus {
     vits_status: String,
     memory_status: String,
     microphone_status: String,
-    qdrant_runtime_status: String,
     voice_hardware_status: String,
     voice_hardware_detail: String,
     voice_gpu: Option<String>,
@@ -132,8 +131,7 @@ fn apply_memory_env(settings: &mut AppSettings, env: &MemoryEnvConfig) {
     if settings.embedding_dimension == 0 {
         settings.embedding_dimension = env.embedding_dimension;
     }
-    settings.memory_configured = !settings.qdrant_url.is_empty()
-        && !settings.embedding_base_url.is_empty()
+    settings.memory_configured = !settings.embedding_base_url.is_empty()
         && !settings.embedding_model.is_empty()
         && !settings.embedding_api_key.is_empty()
         && settings.embedding_dimension > 0;
@@ -157,7 +155,6 @@ fn apply_tts_defaults(settings: &mut AppSettings) {
 
 pub(crate) fn memory_config(settings: &AppSettings) -> crate::memory::MemoryConfig {
     crate::memory::MemoryConfig {
-        qdrant_url: settings.qdrant_url.clone(),
         embedding_base_url: settings.embedding_base_url.clone(),
         embedding_model: settings.embedding_model.clone(),
         embedding_api_key: settings.embedding_api_key.clone(),
@@ -381,7 +378,6 @@ pub async fn get_runtime_status(
     model: State<'_, ModelConfig>,
     voice: State<'_, crate::audio::VoiceState>,
     memory_env: State<'_, MemoryEnvConfig>,
-    qdrant_runtime: State<'_, crate::qdrant_runtime::QdrantRuntime>,
     gpt_sovits: State<'_, crate::gpt_sovits::GptSoVitsState>,
 ) -> Result<RuntimeStatus, String> {
     let has_key = !model.api_key.is_empty();
@@ -392,27 +388,7 @@ pub async fn get_runtime_status(
     let memory_status = if !settings.memory_configured {
         "not_configured"
     } else {
-        let config = memory_config(&settings);
-        let mut available = crate::memory::health(&config).await;
-        // 设置窗口和 Qdrant Runtime 会在应用启动时并行初始化。首次检查如果
-        // 恰好落在启动窗口内，短暂重试，避免返回随后不会自动更新的假阴性。
-        if !available
-            && matches!(
-                crate::qdrant_runtime::status(qdrant_runtime.inner())
-                    .await
-                    .as_str(),
-                "not_started" | "starting"
-            )
-        {
-            for _ in 0..10 {
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                if crate::memory::health(&config).await {
-                    available = true;
-                    break;
-                }
-            }
-        }
-        if available {
+        if crate::memory::health(&memory_config(&settings)).await {
             "available"
         } else {
             "unavailable"
@@ -436,7 +412,6 @@ pub async fn get_runtime_status(
             "disabled"
         }
         .into(),
-        qdrant_runtime_status: crate::qdrant_runtime::status(qdrant_runtime.inner()).await,
         voice_hardware_status: if voice_runtime.gpu.is_some() {
             "supported".into()
         } else {
@@ -673,7 +648,8 @@ async fn process_message(
     if model.api_key.is_empty() {
         return Err("未在 .env 中配置 DEEPSEEK_API_KEY".into());
     }
-    let recalled = match crate::memory::recall(&memory_config(&settings), &content).await {
+    let recalled = match crate::memory::recall(db_state, &memory_config(&settings), &content).await
+    {
         Ok(r) => r,
         Err(e) => {
             log_warn!("memory recall failed: {e}");
@@ -689,6 +665,7 @@ async fn process_message(
             .collect::<Vec<_>>()
             .join("\n")
     };
+    log_info!("memory recall context injected into main conversation: query={}, context={}", content, memory_context);
     // 系统感知：用户授权后，把实时状态摘要注入系统提示词（只读，不增加 LLM 调用次数）。
     let system_context = if settings.system_status_enabled
         || settings.taskbar_apps_enabled
@@ -753,14 +730,10 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
         )
     };
     apply_memory_env(&mut settings, memory_env.inner());
-    let config = memory_config(&settings);
-    let mut tools = vec![
+    let tools = vec![
         serde_json::json!({"type":"function","function":{"name":"create_todo","description":"创建一个到点提醒用户的待办事项","parameters":{"type":"object","properties":{"title":{"type":"string"},"due_at":{"type":"string","description":"含时区的 RFC3339 时间"},"timezone":{"type":"string"}},"required":["title","due_at"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"list_todos","description":"查看尚未完成的提醒事项","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
     ];
-    if config.is_complete() {
-        tools.push(serde_json::json!({"type":"function","function":{"name":"remember","description":"保存稳定且值得未来使用的长期记忆","parameters":{"type":"object","properties":{"text":{"type":"string"},"memory_type":{"type":"string","enum":["fact","preference","habit","relationship","experience"]},"importance":{"type":"number","minimum":0,"maximum":1}},"required":["text","memory_type","importance"],"additionalProperties":false}}}));
-    }
     let mut messages = vec![
         serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求和角色回复是否需要调用工具。不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"))}),
     ];
@@ -845,29 +818,6 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                         &db::list_pending_todos(&conn).map_err(|e| e.to_string())?,
                     )
                     .map_err(|e| e.to_string())?
-                }
-                "remember" => {
-                    let text = args
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .ok_or("记忆缺少内容")?;
-                    match crate::memory::remember(
-                        db_state.inner(),
-                        &config,
-                        text,
-                        args.get("memory_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("fact"),
-                        args.get("importance")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.5),
-                        Some(source_message_id),
-                    )
-                    .await
-                    {
-                        Ok(v) => serde_json::to_string(&v).map_err(|e| e.to_string())?,
-                        Err(e) => format!("记忆未保存：{e}"),
-                    }
                 }
                 _ => return Err(format!("不允许的工具：{name}")),
             };
@@ -1076,9 +1026,11 @@ pub fn list_microphone_devices() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn list_memories(db_state: State<'_, DbState>) -> Result<Vec<db::Memory>, String> {
+pub async fn list_memories(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<crate::memory_store::StoredMemory>, String> {
     let conn = db_state.0.lock().await;
-    db::list_memories(&conn).map_err(|e| e.to_string())
+    crate::memory_store::list_active(&conn, 500).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1088,7 +1040,10 @@ pub async fn list_todos(db_state: State<'_, DbState>) -> Result<Vec<db::Todo>, S
 }
 
 #[tauri::command]
-pub async fn toggle_proactive_enabled(app: AppHandle, db_state: State<'_, DbState>) -> Result<bool, String> {
+pub async fn toggle_proactive_enabled(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<bool, String> {
     let enabled = {
         let conn = db_state.0.lock().await;
         db::toggle_proactive_enabled(&conn).map_err(|e| e.to_string())?
@@ -1177,7 +1132,10 @@ pub async fn test_tool_hook(app: AppHandle, tool: String) -> Result<(), String> 
 }
 
 /// 系统感知命令：逐项检查授权开关，未授权时拒绝读取。
-async fn require_permission(db_state: &DbState, pick: fn(&AppSettings) -> bool) -> Result<(), String> {
+async fn require_permission(
+    db_state: &DbState,
+    pick: fn(&AppSettings) -> bool,
+) -> Result<(), String> {
     let enabled = {
         let conn = db_state.0.lock().await;
         let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;

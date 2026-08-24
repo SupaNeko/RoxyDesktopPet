@@ -1,68 +1,59 @@
-use crate::db::{self, DbState, Memory};
-use serde_json::Value;
+use crate::db::DbState;
+use crate::memory_store::StoredMemory;
+use serde::Deserialize;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct MemoryConfig {
-    pub qdrant_url: String,
     pub embedding_base_url: String,
     pub embedding_model: String,
     pub embedding_api_key: String,
     pub embedding_dimension: u32,
 }
-
 impl MemoryConfig {
     pub fn is_complete(&self) -> bool {
-        !self.qdrant_url.is_empty()
-            && !self.embedding_base_url.is_empty()
+        !self.embedding_base_url.is_empty()
             && !self.embedding_model.is_empty()
             && !self.embedding_api_key.is_empty()
             && self.embedding_dimension > 0
     }
-    fn collection(&self) -> String {
-        let model: String = self
-            .embedding_model
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        format!(
-            "roxy_memories_{}_{}",
-            model.trim_matches('_'),
-            self.embedding_dimension
-        )
-    }
+}
+#[derive(Deserialize)]
+struct EmbeddingResponse {
+    data: Vec<EmbeddingItem>,
+}
+#[derive(Deserialize)]
+struct EmbeddingItem {
+    embedding: Vec<f32>,
 }
 
-async fn embed(config: &MemoryConfig, text: &str) -> Result<Vec<f32>, String> {
+pub async fn embed(config: &MemoryConfig, text: &str) -> Result<Vec<f32>, String> {
+    if !config.is_complete() {
+        return Err("长期记忆 embedding 尚未配置".into());
+    }
     let response = reqwest::Client::new()
         .post(format!(
             "{}/embeddings",
             config.embedding_base_url.trim_end_matches('/')
         ))
         .bearer_auth(&config.embedding_api_key)
-        .json(&serde_json::json!({"model":config.embedding_model,"input":text,"dimensions":config.embedding_dimension,"encoding_format":"float"}))
+        .json(&serde_json::json!({"model":config.embedding_model,"input":text}))
         .send()
         .await
         .map_err(|e| format!("Embedding 请求失败：{e}"))?;
     if !response.status().is_success() {
-        return Err(format!("Embedding API 返回 {}", response.status()));
+        return Err(format!("Embedding 返回 {}", response.status()));
     }
-    let value: Value = response
+    let value: EmbeddingResponse = response
         .json()
         .await
         .map_err(|e| format!("Embedding 响应无效：{e}"))?;
-    let vector: Vec<f32> = serde_json::from_value(
-        value
-            .pointer("/data/0/embedding")
-            .cloned()
-            .ok_or("Embedding 响应缺少向量")?,
-    )
-    .map_err(|e| format!("Embedding 向量无效：{e}"))?;
+    let vector = value
+        .data
+        .into_iter()
+        .next()
+        .map(|v| v.embedding)
+        .ok_or("Embedding 响应缺少向量")?;
     if vector.len() != config.embedding_dimension as usize {
         return Err(format!(
             "Embedding 维度不匹配：配置 {}，实际 {}",
@@ -72,168 +63,160 @@ async fn embed(config: &MemoryConfig, text: &str) -> Result<Vec<f32>, String> {
     }
     Ok(vector)
 }
-
-async fn ensure_collection(config: &MemoryConfig) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    let url = format!(
-        "{}/collections/{}",
-        config.qdrant_url.trim_end_matches('/'),
-        config.collection()
-    );
-    let exists = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("无法连接 Qdrant：{e}"))?;
-    if exists.status().is_success() {
-        return Ok(());
-    }
-    let response = client
-        .put(&url)
-        .json(
-            &serde_json::json!({"vectors":{"size":config.embedding_dimension,"distance":"Cosine"}}),
-        )
-        .send()
-        .await
-        .map_err(|e| format!("创建 Qdrant collection 失败：{e}"))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("Qdrant 创建 collection 返回 {}", response.status()))
-    }
-}
-
 pub async fn health(config: &MemoryConfig) -> bool {
-    if !config.is_complete() {
-        return false;
+    config.is_complete()
+}
+fn cosine(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
     }
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    else {
-        return false;
-    };
-    client
-        .get(format!(
-            "{}/collections",
-            config.qdrant_url.trim_end_matches('/')
-        ))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+    let (mut dot, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (x, y) in a.iter().zip(b) {
+        let (x, y) = (*x as f64, *y as f64);
+        dot += x * y;
+        aa += x * x;
+        bb += y * y
+    }
+    if aa == 0.0 || bb == 0.0 {
+        0.0
+    } else {
+        dot / (aa.sqrt() * bb.sqrt())
+    }
+}
+fn terms(text: &str) -> HashSet<String> {
+    let chars: Vec<char> = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+        .collect();
+    let mut out = HashSet::new();
+    for c in &chars {
+        out.insert(c.to_string());
+    }
+    for w in chars.windows(2) {
+        out.insert(w.iter().collect());
+    }
+    out
+}
+fn lexical(query: &HashSet<String>, text: &str) -> f64 {
+    if query.is_empty() {
+        return 0.0;
+    }
+    let other = terms(text);
+    query.intersection(&other).count() as f64 / query.len() as f64
+}
+fn freshness(updated: i64, now: i64) -> f64 {
+    let days = ((now - updated).max(0) as f64) / 86_400_000.0;
+    (-days / 180.0).exp()
 }
 
-pub async fn remember(
-    db_state: &DbState,
+const MIN_SEMANTIC: f64 = 0.42;
+const MIN_RELEVANCE: f64 = 0.44;
+const EXACT_LEXICAL: f64 = 0.55;
+const MAX_RELATIVE_GAP: f64 = 0.08;
+const MAX_RECALL_RESULTS: usize = 4;
+
+fn relevance(semantic: f64, lexical: f64) -> f64 {
+    semantic * 0.82 + lexical * 0.18
+}
+
+fn is_relevant(semantic: f64, lexical: f64) -> bool {
+    (semantic >= MIN_SEMANTIC && relevance(semantic, lexical) >= MIN_RELEVANCE)
+        || lexical >= EXACT_LEXICAL
+}
+
+pub async fn recall(
+    db: &DbState,
     config: &MemoryConfig,
-    text: &str,
-    memory_type: &str,
-    importance: f64,
-    source_message_id: Option<&str>,
-) -> Result<Memory, String> {
-    if !config.is_complete() {
-        return Err("长期记忆尚未配置".into());
-    }
-    let text = text.trim();
-    if text.is_empty() {
-        return Err("记忆内容不能为空".into());
-    }
-    let memory = {
-        let conn = db_state.0.lock().await;
-        db::insert_memory(
-            &conn,
-            text,
-            memory_type,
-            importance.clamp(0.0, 1.0),
-            source_message_id,
-        )
-        .map_err(|e| e.to_string())?
-    };
-    let result = async {
-        let vector = embed(config, text).await?;
-        ensure_collection(config).await?;
-        let response = reqwest::Client::new().put(format!("{}/collections/{}/points?wait=true", config.qdrant_url.trim_end_matches('/'), config.collection())).json(&serde_json::json!({"points":[{"id":memory.id,"vector":vector,"payload":{"text":memory.text,"memory_type":memory.memory_type,"importance":memory.importance,"status":"active","created_at":memory.created_at}}]})).send().await.map_err(|e| format!("写入 Qdrant 失败：{e}"))?;
-        if !response.status().is_success() { return Err(format!("Qdrant upsert 返回 {}", response.status())); }
-        Ok::<(),String>(())
-    }.await;
-    if let Err(e) = &result {
-        log_warn!("memory::remember embedding failed for id={}: {e}", memory.id);
-    }
-    let conn = db_state.0.lock().await;
-    db::set_memory_embedding_status(
-        &conn,
-        &memory.id,
-        if result.is_ok() { "ready" } else { "failed" },
-        Some(&config.collection()),
-    )
-    .map_err(|e| e.to_string())?;
-    result?;
-    Ok(memory)
-}
-
-pub async fn recall(config: &MemoryConfig, query: &str) -> Result<Vec<String>, String> {
-    if !config.is_complete() {
+    query: &str,
+) -> Result<Vec<String>, String> {
+    log_info!("memory recall started: query={query}");
+    if query.trim().is_empty() {
+        log_info!("memory recall skipped: empty query");
         return Ok(vec![]);
     }
-    let vector = embed(config, query).await?;
-    ensure_collection(config).await?;
-    let response = reqwest::Client::new().post(format!("{}/collections/{}/points/search", config.qdrant_url.trim_end_matches('/'), config.collection())).json(&serde_json::json!({"vector":vector,"limit":6,"with_payload":true,"filter":{"must":[{"key":"status","match":{"value":"active"}}]}})).send().await.map_err(|e| format!("检索 Qdrant 失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("Qdrant 检索返回 {}", response.status()));
+    if !config.is_complete() {
+        log_warn!("memory recall skipped: embedding not configured");
+        return Ok(vec![]);
     }
-    let value: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Qdrant 响应无效：{e}"))?;
-    Ok(value
-        .get("result")
-        .and_then(Value::as_array)
+    log_info!("memory recall step=embedding request: model={}, dimensions={}, query={query}", config.embedding_model, config.embedding_dimension);
+    let query_vector = embed(config, query).await?;
+    log_info!("memory recall step=embedding ready: actual_dimensions={}", query_vector.len());
+    let memories = {
+        let conn = db.0.lock().await;
+        crate::memory_store::list_active(&conn, 5000).map_err(|e| e.to_string())?
+    };
+    log_info!("memory recall step=sqlite candidates loaded: count={}", memories.len());
+    let query_terms = terms(query);
+    log_info!("memory recall step=lexical terms built: count={}, terms={:?}", query_terms.len(), query_terms);
+    let now = chrono::Utc::now().timestamp_millis();
+    let candidate_count = memories.len();
+    let mut ranked: Vec<(f64, StoredMemory)> = Vec::new();
+    for memory in memories {
+        let semantic = memory.embedding.as_ref().map(|v| cosine(&query_vector, v)).unwrap_or(0.0).max(0.0);
+        let keyword = lexical(&query_terms, &memory.text);
+        let relevance_score = relevance(semantic, keyword);
+        let freshness_score = freshness(memory.updated_at, now);
+        let recall_boost = ((memory.recall_count as f64 + 1.0).ln() / 10.0).min(1.0);
+        let score = semantic * 0.62
+            + keyword * 0.18
+            + memory.importance * 0.10
+            + memory.confidence * 0.05
+            + freshness_score * 0.03
+            + recall_boost * 0.02;
+        let accepted = is_relevant(semantic, keyword);
+        log_info!("memory recall candidate: id={}, accepted={}, semantic={:.6}, lexical={:.6}, relevance={:.6}, importance={:.6}, confidence={:.6}, freshness={:.6}, recall_boost={:.6}, final_score={:.6}, topic={}, subtopic={}, content={}", memory.id, accepted, semantic, keyword, relevance_score, memory.importance, memory.confidence, freshness_score, recall_boost, score, memory.topic, memory.subtopic, memory.text);
+        if accepted {
+            ranked.push((score, memory));
+        }
+    }
+    log_info!("memory recall step=absolute relevance filter: input={}, accepted={}, min_semantic={}, min_relevance={}, exact_lexical={}", candidate_count, ranked.len(), MIN_SEMANTIC, MIN_RELEVANCE, EXACT_LEXICAL);
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (index, (score, memory)) in ranked.iter().enumerate() {
+        log_info!("memory recall sorted[{}]: id={}, score={:.6}, content={}", index + 1, memory.id, score, memory.text);
+    }
+    if let Some((best_score, _)) = ranked.first() {
+        let best_score = *best_score;
+        let relative_floor = best_score - MAX_RELATIVE_GAP;
+        ranked.retain(|(score, _)| *score >= relative_floor);
+        log_info!("memory recall step=relative score filter: best_score={:.6}, max_gap={}, relative_floor={:.6}, remaining={}", best_score, MAX_RELATIVE_GAP, relative_floor, ranked.len());
+    }
+    ranked.truncate(MAX_RECALL_RESULTS);
+    let ids = ranked.iter().map(|(_, m)| m.id.clone()).collect::<Vec<_>>();
+    log_info!("memory recall step=topk selected: topk={}, selected={}, ids={:?}", MAX_RECALL_RESULTS, ids.len(), ids);
+    {
+        let conn = db.0.lock().await;
+        crate::memory_store::mark_recalled(&conn, &ids).map_err(|e| e.to_string())?;
+    }
+    let results = ranked
         .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            item.pointer("/payload/text")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
+        .map(|(_, m)| format!("[{} / {}] {}", m.topic, m.subtopic, m.text))
+        .collect::<Vec<_>>();
+    log_info!("memory recall completed: query={query}, result_count={}, results={:?}", results.len(), results);
+    Ok(results)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    #[ignore = "requires Qdrant runtime and embedding credentials"]
-    async fn memory_survives_qdrant_restart() {
-        let runtime = crate::qdrant_runtime::QdrantRuntime::default();
-        let config = MemoryConfig {
-            qdrant_url: "http://127.0.0.1:6333".into(),
-            embedding_base_url: std::env::var("EMBEDDING_BASE_URL").unwrap(),
-            embedding_model: std::env::var("EMBEDDING_MODEL").unwrap(),
-            embedding_api_key: std::env::var("EMBEDDING_API_KEY").unwrap(),
-            embedding_dimension: std::env::var("EMBEDDING_DIMENSION")
-                .unwrap()
-                .parse()
-                .unwrap(),
-        };
-        crate::qdrant_runtime::ensure(&runtime, &config.qdrant_url)
-            .await
-            .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let db = DbState(tokio::sync::Mutex::new(
-            db::open(&dir.path().join("memory.db")).unwrap(),
-        ));
-        let marker = format!("ChatPet持久化测试记忆{}", uuid::Uuid::new_v4());
-        remember(&db, &config, &marker, "fact", 0.8, None)
-            .await
-            .unwrap();
-        crate::qdrant_runtime::shutdown(&runtime).await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        crate::qdrant_runtime::ensure(&runtime, &config.qdrant_url)
-            .await
-            .unwrap();
-        let recalled = recall(&config, &marker).await.unwrap();
-        assert!(recalled.iter().any(|text| text == &marker));
-        crate::qdrant_runtime::shutdown(&runtime).await;
+    #[test]
+    fn cosine_identity() {
+        assert!((cosine(&[1.0, 2.0], &[1.0, 2.0]) - 1.0).abs() < 1e-6)
+    }
+    #[test]
+    fn lexical_matches_chinese() {
+        assert!(lexical(&terms("低糖食物"), "用户不喜欢甜食，偏好低糖") > 0.2)
+    }
+    #[test]
+    fn freshness_decays() {
+        assert!(freshness(0, 0) > freshness(0, 86_400_000 * 365))
+    }
+    #[test]
+    fn weak_semantic_match_is_rejected() {
+        assert!(!is_relevant(0.40, 0.10));
+        assert!(!is_relevant(0.43, 0.20));
+    }
+    #[test]
+    fn strong_semantic_or_exact_lexical_match_is_accepted() {
+        assert!(is_relevant(0.55, 0.10));
+        assert!(is_relevant(0.20, 0.60));
     }
 }
