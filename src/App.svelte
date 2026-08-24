@@ -215,8 +215,7 @@
       <p class="note">模型连接由项目根目录的 .env 管理。修改后请完全退出并重新启动 ChatPet。</p>
     </section>
     <section><h2>长期记忆</h2>
-      <div class="model-summary"><strong>Qdrant + Embedding</strong><small>Runtime：{runtime?.qdrant_runtime_status ?? 'unknown'}</small><span class:ready={runtime?.memory_status === 'available'}>{runtime?.memory_status === 'available' ? '可用' : runtime?.memory_status === 'unavailable' ? 'Qdrant 暂不可用' : '尚未配置'}</span></div>
-      <label>Qdrant 地址<input bind:value={settings.qdrant_url} placeholder="http://127.0.0.1:6333" /></label>
+      <div class="model-summary"><strong>本地长期记忆</strong><small>SQLite 存储 · 观察者独占维护</small><span class:ready={runtime?.memory_status === 'available'}>{runtime?.memory_status === 'available' ? '可用' : '尚未配置 Embedding'}</span></div>
       <label>Embedding API 地址<input bind:value={settings.embedding_base_url} placeholder="OpenAI-compatible base URL" /></label>
       <label>Embedding 模型<input bind:value={settings.embedding_model} /></label>
       <label>Embedding 维度<input type="number" min="1" bind:value={settings.embedding_dimension} /></label>
@@ -225,7 +224,7 @@
         <span><strong>记忆观察者</strong><small>{settings.memory_observer_enabled ? '定期总结对话中值得长期保存的信息' : '已关闭'}</small></span>
       </button>
       <label>每多少条消息观察一次<input type="number" min="2" max="500" bind:value={settings.memory_observer_interval} disabled={!settings.memory_observer_enabled} /></label>
-      <p class="note">SQLite 保存记忆事实，Qdrant 仅负责语义检索。服务不可用时自动退化为普通对话。</p>
+      <p class="note">记忆事实与向量都保存在本地 SQLite；语义检索由 Rust 在进程内完成。Embedding 不可用时自动退化为普通对话。</p>
     </section>
     <section><h2>系统感知</h2>
       <button class="option" class:on={settings.system_status_enabled} onclick={() => settings.system_status_enabled = !settings.system_status_enabled}>

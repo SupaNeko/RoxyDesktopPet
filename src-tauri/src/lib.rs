@@ -10,9 +10,9 @@ mod gpt_sovits;
 mod hook_server;
 mod media_control;
 mod memory;
+mod memory_store;
 mod observer;
 mod pet_interaction;
-mod qdrant_runtime;
 mod scheduler;
 mod system_monitor;
 mod tool_hook;
@@ -216,12 +216,7 @@ pub fn run() {
     let voice_enabled = db::get_settings(&db, false)
         .ok()
         .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
-    let saved_qdrant_url = db::get_settings(&db, false)
-        .ok()
-        .map(|settings| settings.qdrant_url)
-        .filter(|url| !url.is_empty());
     let memory_env = memory_env_config();
-    let qdrant_url = saved_qdrant_url.unwrap_or_else(|| memory_env.qdrant_url.clone());
 
     tauri::Builder::default()
         // Command state must exist before setup because configured webviews can load
@@ -230,7 +225,6 @@ pub fn run() {
         .manage(model_config())
         .manage(asr_env_config())
         .manage(memory_env)
-        .manage(qdrant_runtime::QdrantRuntime::default())
         .manage(gpt_sovits::GptSoVitsState::default())
         .manage(audio::VoiceState::default())
         .manage(global_input::GlobalInputState::default())
@@ -240,11 +234,6 @@ pub fn run() {
         .manage(voice_output::VoiceOutputState::new(&data_dir()))
         .manage(tool_hook::ToolHookState::default())
         .setup(move |app| {
-            let runtime_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let runtime = runtime_app.state::<qdrant_runtime::QdrantRuntime>();
-                let _ = qdrant_runtime::ensure(runtime.inner(), &qdrant_url).await;
-            });
             if voice_enabled {
                 let voice_app = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -362,8 +351,6 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move {
                             let voice = handle.state::<gpt_sovits::GptSoVitsState>();
                             gpt_sovits::shutdown(voice.inner()).await;
-                            let runtime = handle.state::<qdrant_runtime::QdrantRuntime>();
-                            qdrant_runtime::shutdown(runtime.inner()).await;
                             handle.exit(0);
                         });
                     }

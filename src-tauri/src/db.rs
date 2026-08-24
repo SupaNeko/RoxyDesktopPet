@@ -155,17 +155,6 @@ pub struct DueReminder {
     pub scheduled_at_utc: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Memory {
-    pub id: String,
-    pub text: String,
-    pub memory_type: String,
-    pub importance: f64,
-    pub status: String,
-    pub embedding_status: String,
-    pub created_at: i64,
-}
-
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -192,7 +181,9 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, title TEXT NOT NULL, due_at_utc INTEGER NOT NULL, timezone TEXT NOT NULL, status TEXT NOT NULL, source_message_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS reminder_occurrences (id TEXT PRIMARY KEY, todo_id TEXT NOT NULL, scheduled_at_utc INTEGER NOT NULL, status TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, lease_until INTEGER, delivered_at INTEGER, last_error TEXT, UNIQUE(todo_id, scheduled_at_utc));
          CREATE TABLE IF NOT EXISTS scheduler_state (id INTEGER PRIMARY KEY CHECK (id = 1), next_proactive_at INTEGER, proactive_day TEXT, proactive_count INTEGER NOT NULL DEFAULT 0);
-         CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, text TEXT NOT NULL, memory_type TEXT NOT NULL, importance REAL NOT NULL, status TEXT NOT NULL, embedding_collection TEXT, embedding_status TEXT NOT NULL, source_message_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, topic TEXT NOT NULL DEFAULT '其他', subtopic TEXT NOT NULL DEFAULT '一般', text TEXT NOT NULL, memory_type TEXT NOT NULL, importance REAL NOT NULL, confidence REAL NOT NULL DEFAULT 0.8, status TEXT NOT NULL, embedding BLOB, embedding_model TEXT, embedding_dimension INTEGER NOT NULL DEFAULT 0, embedding_collection TEXT, embedding_status TEXT NOT NULL DEFAULT 'pending', source_message_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_recalled_at INTEGER, recall_count INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS memory_events (id TEXT PRIMARY KEY, first_message_rowid INTEGER NOT NULL, last_message_rowid INTEGER NOT NULL, transcript TEXT NOT NULL, observer_result TEXT, status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL, processed_at INTEGER);
+         CREATE TABLE IF NOT EXISTS memory_revisions (id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, action TEXT NOT NULL, old_text TEXT, new_text TEXT, source_event_id TEXT, created_at INTEGER NOT NULL, FOREIGN KEY(memory_id) REFERENCES memories(id));
          CREATE TABLE IF NOT EXISTS memory_observer_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_message_rowid INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
          INSERT OR IGNORE INTO scheduler_state(id, proactive_count) VALUES(1, 0);
          INSERT OR IGNORE INTO memory_observer_state(id) VALUES(1);
@@ -210,6 +201,53 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     if !message_columns.iter().any(|name| name == "emotion") {
         conn.execute("ALTER TABLE messages ADD COLUMN emotion TEXT", [])?;
     }
+    let memory_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(memories)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    for (name, sql) in [
+        (
+            "topic",
+            "ALTER TABLE memories ADD COLUMN topic TEXT NOT NULL DEFAULT '其他'",
+        ),
+        (
+            "subtopic",
+            "ALTER TABLE memories ADD COLUMN subtopic TEXT NOT NULL DEFAULT '一般'",
+        ),
+        (
+            "confidence",
+            "ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.8",
+        ),
+        (
+            "embedding",
+            "ALTER TABLE memories ADD COLUMN embedding BLOB",
+        ),
+        (
+            "embedding_model",
+            "ALTER TABLE memories ADD COLUMN embedding_model TEXT",
+        ),
+        (
+            "embedding_dimension",
+            "ALTER TABLE memories ADD COLUMN embedding_dimension INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "last_recalled_at",
+            "ALTER TABLE memories ADD COLUMN last_recalled_at INTEGER",
+        ),
+        (
+            "recall_count",
+            "ALTER TABLE memories ADD COLUMN recall_count INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !memory_columns.iter().any(|column| column == name) {
+            conn.execute(sql, [])?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(status, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_memories_topic ON memories(topic, subtopic, status);",
+    )?;
     let columns: Vec<String> = conn
         .prepare("PRAGMA table_info(app_settings)")?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -386,10 +424,6 @@ pub fn advance_memory_observer(conn: &Connection, rowid: i64) -> rusqlite::Resul
     Ok(())
 }
 
-pub fn memory_text_exists(conn: &Connection, text: &str) -> rusqlite::Result<bool> {
-    conn.query_row("SELECT EXISTS(SELECT 1 FROM memories WHERE status='active' AND lower(trim(text))=lower(trim(?)))", [text], |r| r.get(0))
-}
-
 pub fn create_todo(
     conn: &mut Connection,
     title: &str,
@@ -529,61 +563,6 @@ pub fn claim_proactive_due(
     )?;
     reset_proactive_schedule(conn, settings, now)?;
     Ok(true)
-}
-
-pub fn insert_memory(
-    conn: &Connection,
-    text: &str,
-    memory_type: &str,
-    importance: f64,
-    source_message_id: Option<&str>,
-) -> rusqlite::Result<Memory> {
-    let now = chrono::Utc::now().timestamp_millis();
-    let memory = Memory {
-        id: uuid::Uuid::new_v4().to_string(),
-        text: text.into(),
-        memory_type: memory_type.into(),
-        importance,
-        status: "active".into(),
-        embedding_status: "pending".into(),
-        created_at: now,
-    };
-    conn.execute("INSERT INTO memories(id,text,memory_type,importance,status,embedding_status,source_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",params![memory.id,memory.text,memory.memory_type,memory.importance,memory.status,memory.embedding_status,source_message_id,now,now])?;
-    Ok(memory)
-}
-pub fn set_memory_embedding_status(
-    conn: &Connection,
-    id: &str,
-    status: &str,
-    collection: Option<&str>,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE memories SET embedding_status=?,embedding_collection=?,updated_at=? WHERE id=?",
-        params![
-            status,
-            collection,
-            chrono::Utc::now().timestamp_millis(),
-            id
-        ],
-    )?;
-    Ok(())
-}
-pub fn list_memories(conn: &Connection) -> rusqlite::Result<Vec<Memory>> {
-    let mut stmt=conn.prepare("SELECT id,text,memory_type,importance,status,embedding_status,created_at FROM memories WHERE status='active' ORDER BY created_at DESC LIMIT 200")?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(Memory {
-                id: r.get(0)?,
-                text: r.get(1)?,
-                memory_type: r.get(2)?,
-                importance: r.get(3)?,
-                status: r.get(4)?,
-                embedding_status: r.get(5)?,
-                created_at: r.get(6)?,
-            })
-        })?
-        .collect();
-    rows
 }
 
 #[cfg(test)]

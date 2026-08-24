@@ -3,6 +3,7 @@
   "productName": "RoxyDesktopPet",
   "version": "0.1.0",
   "identifier": "com.chatpet.desktop",
+  "mainBinaryName": "RoxyDesktopPet",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:1421",
@@ -65,9 +66,6 @@
     "active": true,
     "targets": [
       "nsis"
-    ],
-    "resources": [
-      "resources/qdrant/qdrant.exe"
     ],
     "windows": {
       "nsis": {

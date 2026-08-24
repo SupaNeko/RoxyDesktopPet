@@ -70,7 +70,6 @@ export interface RuntimeStatus {
   vits_status: 'disabled' | 'not_configured' | 'unsupported_gpu' | 'starting' | 'available' | 'error';
   memory_status: 'not_configured' | 'unavailable' | 'available';
   microphone_status: 'disabled' | 'listening' | 'error';
-  qdrant_runtime_status: string;
   voice_hardware_status: 'supported' | 'unsupported';
   voice_hardware_detail: string;
   voice_gpu: string | null;

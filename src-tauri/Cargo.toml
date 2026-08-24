@@ -4,6 +4,12 @@ version = "0.1.0"
 description = "A local-first Windows AI desktop companion"
 edition = "2021"
 rust-version = "1.80"
+autobins = false
+default-run = "RoxyDesktopPet"
+
+[[bin]]
+name = "RoxyDesktopPet"
+path = "src/main.rs"
 
 [lib]
 name = "chatpet_lib"
