@@ -166,7 +166,12 @@ pub fn update_layout(app: &AppHandle, request: LayoutRequest) -> Result<(), Stri
         .ok_or_else(|| "找不到桌宠窗口".to_string())?;
     let size = window.outer_size().map_err(|error| error.to_string())?;
     let desired_height = (request.content_height * scale).ceil().clamp(230.0, 760.0) as u32;
-    if (size.height as i64 - desired_height as i64).unsigned_abs() > 2 {
+    // Grow to make room for bubbles, but do not shrink again while the app is
+    // running. Removing a bubble reflows Chromium before the top-level HWND
+    // resize is composited, which can expose a one-frame downward jump. The
+    // unused transparent area remains pixel-click-through, so retaining the
+    // larger window has no interaction cost. A new launch starts at 230 px.
+    if desired_height > size.height.saturating_add(2) {
         resize_preserving_bottom_center(&window, size, desired_height)?;
     }
     Ok(())
