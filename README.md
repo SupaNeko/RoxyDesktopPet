@@ -55,17 +55,16 @@ XFYUN_ASR_API_SECRET=
 
 ### 长期记忆
 
-长期记忆使用 OpenAI-compatible Embedding API 生成向量，并由本地 Qdrant 完成语义检索：
+长期记忆由观察者独占维护。记忆文本和 embedding 向量保存在桌宠自己的 SQLite 数据库中，召回时由 Rust 在进程内完成语义相似度、词面相关度和排序计算：
 
 ```dotenv
-QDRANT_URL=
 EMBEDDING_BASE_URL=
 EMBEDDING_MODEL=
 EMBEDDING_API_KEY=
 EMBEDDING_DIMENSION=
 ```
 
-Embedding 参数也可以在应用设置中填写。缺少 Embedding 或 Qdrant 时仍可正常对话，但不会进行基于向量检索的长期记忆写入与召回。
+Embedding 参数也可以在应用设置中填写。缺少 Embedding 时仍可正常对话，但不会进行长期记忆写入与召回。该方案不需要 Qdrant、PostgreSQL、Redis、Python 或独立记忆服务。
 
 ## 4. 开发与打包
 
@@ -94,8 +93,6 @@ pnpm tauri build
 ```
 
 安装包输出到 `src-tauri/target/release/bundle/nsis/`。
-
-项目不使用 Docker 启动 Qdrant。桌宠自带固定版本的 `qdrant.exe`，应用会在需要时自动启动，并把数据保存在 `data/qdrant/`；也可以通过 `QDRANT_URL` 连接已有的 Qdrant 服务。
 
 在已准备好 GPT-SoVITS 官方源码、固定 Python/CUDA 运行时和洛琪希模型的开发机器上，可构建独立语音扩展：
 
