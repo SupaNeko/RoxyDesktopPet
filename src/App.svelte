@@ -4,11 +4,11 @@
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
   import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout } from './lib/api';
+  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying } from './lib/api';
   import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
-  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true });
+  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false });
   let runtime = $state<RuntimeStatus | null>(null), messages = $state<Message[]>([]);
   let text = $state(''), error = $state('');
   let busy = $state(false), bubbleVisible = $state(false), composerVisible = $state(false), saved = $state(false);
@@ -146,6 +146,32 @@
   async function enablePassthroughFromMenu() { await changeMousePassthrough(true); await closeMenu(); }
   async function openWindow(label: 'settings'|'todos') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
   const formatDue = (timestamp: number) => new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(timestamp));
+  let systemPreview = $state('');
+  let systemPreviewBusy = $state(false);
+  async function previewSystemPerception() {
+    systemPreviewBusy = true; error = '';
+    try {
+      settings = await saveSettings(settings);
+      const parts: string[] = [];
+      if (settings.system_status_enabled) {
+        const stats = await getHardwareStats();
+        let line = `硬件：CPU ${stats.cpu_usage_percent.toFixed(0)}%，内存 ${(stats.memory_used_mb / Math.max(1, stats.memory_total_mb) * 100).toFixed(0)}%（${stats.memory_used_mb} / ${stats.memory_total_mb} MB）`;
+        if (stats.gpu_name) line += `；显卡 ${stats.gpu_name} ${stats.gpu_usage_percent?.toFixed(0) ?? '-'}%${stats.gpu_temperature_celsius != null ? `，${stats.gpu_temperature_celsius.toFixed(0)}℃` : ''}`;
+        parts.push(line);
+      }
+      if (settings.taskbar_apps_enabled) {
+        const apps = await getTaskbarApps();
+        parts.push(apps.length ? `任务栏应用：${apps.map((a) => `${a.title}（${a.process_name}）`).join('、')}` : '任务栏应用：未枚举到窗口');
+        const foreground = apps.find((a) => a.foreground);
+        if (foreground) parts.push(`当前前台：${foreground.title}（${foreground.process_name}）`);
+      }
+      if (settings.now_playing_enabled) {
+        const now = await getNowPlaying();
+        parts.push(now ? `正在播放：${now.title} - ${now.artist}（${now.source_app}，${now.playing ? '播放中' : '已暂停'}）` : '当前播放：未检测到媒体会话');
+      }
+      systemPreview = parts.join('\n') || '请先开启上方至少一项感知开关';
+    } catch (e) { error = String(e); } finally { systemPreviewBusy = false; }
+  }
 </script>
 
 {#if label === 'pet-menu'}
@@ -200,6 +226,22 @@
       </button>
       <label>每多少条消息观察一次<input type="number" min="2" max="500" bind:value={settings.memory_observer_interval} disabled={!settings.memory_observer_enabled} /></label>
       <p class="note">SQLite 保存记忆事实，Qdrant 仅负责语义检索。服务不可用时自动退化为普通对话。</p>
+    </section>
+    <section><h2>系统感知</h2>
+      <button class="option" class:on={settings.system_status_enabled} onclick={() => settings.system_status_enabled = !settings.system_status_enabled}>
+        <span><strong>硬件状态</strong><small>{settings.system_status_enabled ? '允许洛琪希查看 CPU、内存与显卡占用' : '已关闭'}</small></span>
+      </button>
+      <button class="option" class:on={settings.taskbar_apps_enabled} onclick={() => settings.taskbar_apps_enabled = !settings.taskbar_apps_enabled}>
+        <span><strong>任务栏应用</strong><small>{settings.taskbar_apps_enabled ? '允许洛琪希查看任务栏正在运行的应用和当前前台窗口' : '已关闭'}</small></span>
+      </button>
+      <button class="option" class:on={settings.now_playing_enabled} onclick={() => settings.now_playing_enabled = !settings.now_playing_enabled}>
+        <span><strong>当前播放</strong><small>{settings.now_playing_enabled ? '允许洛琪希查看系统正在播放的音乐（QQ音乐需在客户端设置中开启 SMTC）' : '已关闭'}</small></span>
+      </button>
+      {#if settings.system_status_enabled || settings.taskbar_apps_enabled || settings.now_playing_enabled}
+        <button type="button" class="test-button" onclick={previewSystemPerception} disabled={systemPreviewBusy}>{systemPreviewBusy ? '正在读取…' : '预览当前状态'}</button>
+        {#if systemPreview}<p class="note system-preview">{systemPreview}</p>{/if}
+      {/if}
+      <p class="note">均为只读能力，逐项授权、默认关闭。开启后洛琪希会在对话中参考对应信息回答（如“电脑卡不卡”“我在听什么歌”）；数据只在本机实时读取，不保存、不上传。</p>
     </section>
     <section><h2>可选能力</h2>
       <div class="voice-settings">
@@ -392,4 +434,5 @@
   .tool-hook-actions { display: flex; gap: 8px; margin-top: 8px; }
   .ghost-button { border: 1px solid #d3c6b8; border-radius: 9px; padding: 8px 13px; color: #5e554d; background: #fffaf3; }
   .ghost-button:disabled { opacity: .5; cursor: default; }
-  .settings-page select { width: 100%; border: 1px solid #d3c6b8; border-radius: 9px; padding: 9px 10px; color: #39332d; background: #fffaf3; }</style>
+  .settings-page select { width: 100%; border: 1px solid #d3c6b8; border-radius: 9px; padding: 9px 10px; color: #39332d; background: #fffaf3; }
+  .system-preview { white-space: pre-wrap; overflow-wrap: anywhere; }</style>

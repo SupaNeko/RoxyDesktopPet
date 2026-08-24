@@ -8,11 +8,13 @@ mod db;
 mod global_input;
 mod gpt_sovits;
 mod hook_server;
+mod media_control;
 mod memory;
 mod observer;
 mod pet_interaction;
 mod qdrant_runtime;
 mod scheduler;
+mod system_monitor;
 mod tool_hook;
 mod native_hit_test;
 mod tool_hook_config;
@@ -410,6 +412,9 @@ pub fn run() {
             commands::write_tool_hook_config,
             commands::remove_tool_hook_config,
             commands::test_tool_hook,
+            commands::get_taskbar_apps,
+            commands::get_hardware_stats,
+            commands::get_now_playing,
             pet_interaction::set_mouse_passthrough,
             pet_interaction::get_mouse_passthrough,
             native_hit_test::update_pet_hit_test_layout

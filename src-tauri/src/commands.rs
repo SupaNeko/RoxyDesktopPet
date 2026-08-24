@@ -89,6 +89,9 @@ pub struct SaveSettingsRequest {
     pub tool_hook_daily_limit: u32,
     pub tool_hook_debounce_seconds: u32,
     pub tool_hook_voice_enabled: bool,
+    pub system_status_enabled: bool,
+    pub taskbar_apps_enabled: bool,
+    pub now_playing_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -322,6 +325,9 @@ pub async fn save_settings(
         tool_hook_daily_limit: request.tool_hook_daily_limit.clamp(0, 100),
         tool_hook_debounce_seconds: request.tool_hook_debounce_seconds.clamp(0, 3600),
         tool_hook_voice_enabled: request.tool_hook_voice_enabled,
+        system_status_enabled: request.system_status_enabled,
+        taskbar_apps_enabled: request.taskbar_apps_enabled,
+        now_playing_enabled: request.now_playing_enabled,
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());
@@ -683,9 +689,18 @@ async fn process_message(
             .collect::<Vec<_>>()
             .join("\n")
     };
+    // 系统感知：用户授权后，把实时状态摘要注入系统提示词（只读，不增加 LLM 调用次数）。
+    let system_context = if settings.system_status_enabled
+        || settings.taskbar_apps_enabled
+        || settings.now_playing_enabled
+    {
+        crate::system_monitor::context_summary(&settings).await
+    } else {
+        String::new()
+    };
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
-        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
-        ROXY_PERSONA, chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"), NATURAL_SPEECH_RULES, memory_context
+        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
+        ROXY_PERSONA, chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"), NATURAL_SPEECH_RULES, memory_context, system_context
     )})];
     messages.extend(
         history
@@ -1159,6 +1174,48 @@ pub async fn remove_tool_hook_config(
 #[tauri::command]
 pub async fn test_tool_hook(app: AppHandle, tool: String) -> Result<(), String> {
     crate::tool_hook::test_event(&app, &tool).await
+}
+
+/// 系统感知命令：逐项检查授权开关，未授权时拒绝读取。
+async fn require_permission(db_state: &DbState, pick: fn(&AppSettings) -> bool) -> Result<(), String> {
+    let enabled = {
+        let conn = db_state.0.lock().await;
+        let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+        pick(&settings)
+    };
+    if enabled {
+        Ok(())
+    } else {
+        Err("该功能未授权，请在「设置 → 系统感知」中开启对应开关".into())
+    }
+}
+
+#[tauri::command]
+pub async fn get_taskbar_apps(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<crate::system_monitor::TaskbarApp>, String> {
+    require_permission(db_state.inner(), |s| s.taskbar_apps_enabled).await?;
+    tauri::async_runtime::spawn_blocking(crate::system_monitor::taskbar_apps)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_hardware_stats(
+    db_state: State<'_, DbState>,
+) -> Result<crate::system_monitor::HardwareStats, String> {
+    require_permission(db_state.inner(), |s| s.system_status_enabled).await?;
+    tauri::async_runtime::spawn_blocking(crate::system_monitor::hardware_stats)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_now_playing(
+    db_state: State<'_, DbState>,
+) -> Result<Option<crate::media_control::NowPlaying>, String> {
+    require_permission(db_state.inner(), |s| s.now_playing_enabled).await?;
+    crate::media_control::now_playing().await
 }
 
 #[cfg(test)]

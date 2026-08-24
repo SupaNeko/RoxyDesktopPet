@@ -568,6 +568,16 @@ CREATE TABLE system_state (
 );
 ```
 
+### 11.1 已落地：系统感知（只读）
+
+2026-08 已落地的子集，实现于 `system_monitor.rs` 与 `media_control.rs`：
+
+- 任务栏应用列表 + 前台窗口：`EnumWindows` + Shell 任务栏规则过滤（`system_monitor.rs`，纯函数 `should_include_window` 便于测试），进程名经 sysinfo 按 PID 关联。
+- 硬件状态：sysinfo 读 CPU/内存占用；GPU 名称/占用/显存/温度走 `nvidia-smi`（无需管理员）。CPU 温度明确不做：Windows 无可靠用户态接口（需加载内核驱动读 MSR），超出本项目范围。
+- 当前播放：WinRT GSMTC 只读（`media_control.rs`）。WinRT 对象非 Send，查询在专用线程 + current_thread runtime 执行，oneshot 回传纯数据。
+- 授权模型：三个独立设置开关（默认关），存储于 `app_settings`；`get_taskbar_apps` / `get_hardware_stats` / `get_now_playing` 命令未授权时直接拒绝。
+- 对话注入：`process_message` 按已授权项实时读取并生成简短摘要注入系统提示词，不引入工具调用轮次、不增加 LLM 调用数；未采用上面的 `system_state` 缓存表（按读即用即可，后续若加主动事件再引入）。
+
 ## 12. API、错误与可观测性
 
 每类 Provider 定义独立超时、重试和用量记录：

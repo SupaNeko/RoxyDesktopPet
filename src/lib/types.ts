@@ -49,6 +49,9 @@ export interface AppSettings {
   tool_hook_daily_limit: number;
   tool_hook_debounce_seconds: number;
   tool_hook_voice_enabled: boolean;
+  system_status_enabled: boolean;
+  taskbar_apps_enabled: boolean;
+  now_playing_enabled: boolean;
 }
 
 export interface Message {
@@ -82,3 +85,18 @@ export interface Todo { id: string; title: string; due_at_utc: number; timezone:
 export interface ToolHookStatus { status: 'not_configured' | 'configured' | 'needs_update' | 'error'; detail: string; }
 export interface ToolHookItemInfo { id: string; label: string; status: string; detail: string; }
 export interface ToolHookToolInfo { id: string; name: string; items: ToolHookItemInfo[]; }
+
+export interface TaskbarApp { title: string; process_name: string; pid: number; foreground: boolean; }
+
+export interface HardwareStats {
+  cpu_usage_percent: number;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  gpu_name: string | null;
+  gpu_usage_percent: number | null;
+  gpu_memory_used_mb: number | null;
+  gpu_memory_total_mb: number | null;
+  gpu_temperature_celsius: number | null;
+}
+
+export interface NowPlaying { title: string; artist: string; album: string; source_app: string; playing: boolean; }

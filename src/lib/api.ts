@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
+import type { AppSettings, HardwareStats, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -22,7 +22,8 @@ const demoSettings: AppSettings = {
   proactive_max_minutes: 120,
   proactive_daily_limit: 6,
   qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30,
-  tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true
+  tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_token_enabled: true, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true,
+  system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -85,3 +86,7 @@ export async function listToolHookSupport(): Promise<ToolHookToolInfo[]> { retur
 export async function writeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('write_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
 export async function removeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('remove_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
 export async function testToolHook(tool: string): Promise<void> { if (inTauri()) await invoke('test_tool_hook', { tool }); }
+
+export async function getTaskbarApps(): Promise<TaskbarApp[]> { return inTauri() ? invoke('get_taskbar_apps') : []; }
+export async function getHardwareStats(): Promise<HardwareStats> { return inTauri() ? invoke('get_hardware_stats') : { cpu_usage_percent: 0, memory_used_mb: 0, memory_total_mb: 0, gpu_name: null, gpu_usage_percent: null, gpu_memory_used_mb: null, gpu_memory_total_mb: null, gpu_temperature_celsius: null }; }
+export async function getNowPlaying(): Promise<NowPlaying | null> { return inTauri() ? invoke('get_now_playing') : null; }

@@ -32,7 +32,10 @@ sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 rand = "0.9"
-windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_Shell"] }
+# 只读系统感知：硬件占用（sysinfo）+ SMTC 当前播放（windows/WinRT）
+sysinfo = "0.39"
+windows = { version = "0.62", features = ["Foundation", "Media_Control", "Win32_System_Com"] }
 
 [dev-dependencies]
 tempfile = "3"
