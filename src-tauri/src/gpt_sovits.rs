@@ -269,10 +269,7 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
         let mut command = Command::new(&python);
         // api_v2.py 及其内部模块（TTS.py / sv.py 等）大量依赖 os.getcwd() 定位
         // GPT_SoVITS 包和模型路径，官方约定 cwd 必须是 GPT-SoVITS 仓库根目录。
-        let sovits_dir = api
-            .parent()
-            .ok_or("语音扩展 API 路径无效")?
-            .to_path_buf();
+        let sovits_dir = api.parent().ok_or("语音扩展 API 路径无效")?.to_path_buf();
         command
             .current_dir(&sovits_dir)
             .arg(&api)
@@ -331,10 +328,49 @@ async fn ensure_inner(state: &GptSoVitsState) -> Result<(), String> {
 
 pub async fn shutdown(state: &GptSoVitsState) {
     log_info!("gpt_sovits::shutdown called");
-    let mut inner = state.inner.lock().await;
-    if let Some(child) = inner.child.as_mut() {
-        let _ = child.start_kill();
+    {
+        let mut inner = state.inner.lock().await;
+        if let Some(child) = inner.child.as_mut() {
+            let _ = child.start_kill();
+        }
+        inner.child = None;
+        inner.status = "not_started".into();
     }
-    inner.child = None;
-    inner.status = "not_started".into();
+
+    // A previous desktop-pet process may have left GPT-SoVITS running. In that
+    // case ensure_inner reuses port 9880 without owning a Child handle. Match
+    // the exact Python path from this extension before killing, so unrelated
+    // Python processes are never touched.
+    if let Ok((manifest, root)) = load_manifest() {
+        if let Ok(expected_python) = resolve_relative(&root, &manifest.python) {
+            terminate_extension_python(&expected_python);
+        }
+    }
+
+    for _ in 0..30 {
+        if !health_available().await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+fn terminate_extension_python(expected_python: &Path) {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let expected =
+        std::fs::canonicalize(expected_python).unwrap_or_else(|_| expected_python.into());
+    let expected_text = expected.to_string_lossy().to_lowercase();
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    for (pid, process) in system.processes() {
+        let Some(executable) = process.exe() else {
+            continue;
+        };
+        let executable = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.into());
+        if executable.to_string_lossy().to_lowercase() == expected_text {
+            let killed = process.kill();
+            log_info!("gpt_sovits shutdown matched extension python pid={pid}, killed={killed}");
+        }
+    }
 }
