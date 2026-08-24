@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
 #[derive(Clone, Default)]
-pub struct PetHitTestState(pub Arc<RwLock<HitTestLayout>>);
+pub struct PetHitTestState(Arc<RwLock<HitTestLayout>>);
 
 #[derive(Clone, Default)]
 struct HitTestLayout {
