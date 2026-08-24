@@ -15,7 +15,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, MSG,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_XBUTTONDOWN, WM_XBUTTONUP,
+    WM_XBUTTONDOWN, WM_XBUTTONUP, WM_MOUSEMOVE,
 };
 
 #[derive(Default)]
@@ -38,6 +38,7 @@ pub struct CapturedBinding {
 struct InputEvent {
     vk: u16,
     down: bool,
+    mouse_position: Option<(i32, i32)>,
 }
 
 /// 钩子回调与消费者线程之间的事件通道。钩子回调只做「投递」这一件最小的事，
@@ -51,10 +52,15 @@ fn send_event(vk: u16, down: bool) {
         return;
     }
     if let Some(sender) = HOOK_SENDER.get() {
-        let _ = sender.send(InputEvent { vk, down });
+        let _ = sender.send(InputEvent { vk, down, mouse_position: None });
     }
 }
 
+fn send_mouse_move(x: i32, y: i32) {
+    if let Some(sender) = HOOK_SENDER.get() {
+        let _ = sender.send(InputEvent { vk: 0, down: false, mouse_position: Some((x, y)) });
+    }
+}
 fn vk_label(vk: u16) -> String {
     match vk {
         0x01 => "鼠标左键".into(),
@@ -211,6 +217,11 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
 unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let msg = wparam as u32;
+        let info = &*(lparam as *const MSLLHOOKSTRUCT);
+        if msg == WM_MOUSEMOVE {
+            send_mouse_move(info.pt.x, info.pt.y);
+            return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+        }
         let event = match msg {
             WM_LBUTTONDOWN => Some((0x01u16, true)),
             WM_LBUTTONUP => Some((0x01u16, false)),
@@ -247,6 +258,10 @@ pub fn start_listener(app: AppHandle) {
 fn consume_events(app: AppHandle, rx: Receiver<InputEvent>) {
     let mut pressed: HashSet<u16> = HashSet::new();
     while let Ok(event) = rx.recv() {
+        if let Some((x, y)) = event.mouse_position {
+            crate::native_hit_test::update_mouse_position(&app, x, y);
+            continue;
+        }
         if event.down {
             pressed.insert(event.vk);
         } else {

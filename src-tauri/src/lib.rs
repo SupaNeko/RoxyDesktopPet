@@ -11,12 +11,12 @@ mod hook_server;
 mod media_control;
 mod memory;
 mod memory_store;
+mod native_hit_test;
 mod observer;
 mod pet_interaction;
 mod scheduler;
 mod system_monitor;
 mod tool_hook;
-mod native_hit_test;
 mod tool_hook_config;
 mod voice_output;
 
@@ -172,43 +172,38 @@ fn pet_window_position_path() -> PathBuf {
     data_dir().join("pet-window-position.json")
 }
 
-fn load_pet_window_position(
-    window: &tauri::WebviewWindow,
-) -> Option<tauri::PhysicalPosition<i32>> {
-    let saved = std::fs::read_to_string(pet_window_position_path()).ok()?;
+fn load_pet_window_position(window: &tauri::WebviewWindow) -> Option<tauri::PhysicalPosition<i32>> {
+    let path = pet_window_position_path();
+    let saved = std::fs::read_to_string(&path).ok()?;
     let position: PetWindowPosition = serde_json::from_str(&saved).ok()?;
     if !position.anchored {
         return Some(tauri::PhysicalPosition::new(position.x, position.y));
     }
+
+    // 兼容旧版底边锚点，只转换一次。之后固定保存物理左上角坐标，窗口高度变化不再导致位置漂移。
     let size = window.outer_size().ok()?;
-    Some(tauri::PhysicalPosition::new(
+    let migrated = tauri::PhysicalPosition::new(
         position.x - size.width as i32 / 2,
         position.y - size.height as i32,
-    ))
+    );
+    save_pet_window_position(migrated);
+    Some(migrated)
 }
 
-fn save_pet_window_position(
-    window: &tauri::WebviewWindow,
-    position: tauri::PhysicalPosition<i32>,
-) {
-    let Ok(size) = window.outer_size() else {
-        return;
-
-    };
+fn save_pet_window_position(position: tauri::PhysicalPosition<i32>) {
     let path = pet_window_position_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let saved = PetWindowPosition {
-        x: position.x + size.width as i32 / 2,
-        y: position.y + size.height as i32,
-        anchored: true,
+        x: position.x,
+        y: position.y,
+        anchored: false,
     };
     if let Ok(json) = serde_json::to_string(&saved) {
         let _ = std::fs::write(path, json);
     }
 }
-
 pub fn run() {
     crate::logger::init();
     let db = db::open(&data_dir().join("chatpet.db")).expect("failed to open ChatPet database");
@@ -244,6 +239,8 @@ pub fn run() {
                 });
             }
             global_input::start_listener(app.handle().clone());
+            // Pixel click-through is driven by real mouse events, not a polling loop.
+            global_input::ensure_hooks();
             scheduler::start(app.handle().clone());
 
             let hook_app = app.handle().clone();
@@ -280,19 +277,31 @@ pub fn run() {
             }
 
             if let Some(pet_window) = app.get_webview_window("pet") {
-                if let Err(error) = native_hit_test::install(&pet_window, app.state::<native_hit_test::PetHitTestState>().inner().clone()) {
+                if let Err(error) = native_hit_test::install(
+                    &pet_window,
+                    app.state::<native_hit_test::PetHitTestState>()
+                        .inner()
+                        .clone(),
+                ) {
                     log_error!("安装宠物原生命中测试失败: {error}");
                 }
                 if let Some(position) = load_pet_window_position(&pet_window) {
                     let _ = pet_window.set_position(position);
                 }
-                let position_window = pet_window.clone();
                 pet_window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {
-                        save_pet_window_position(&position_window, *position);
+                        save_pet_window_position(*position);
                     }
                 });
                 let _ = pet_window.show();
+                if let Err(error) = native_hit_test::install(
+                    &pet_window,
+                    app.state::<native_hit_test::PetHitTestState>()
+                        .inner()
+                        .clone(),
+                ) {
+                    log_error!("显示后安装宠物原生命中测试失败: {error}");
+                }
                 pet_window.on_menu_event(|window, event| match event.id.as_ref() {
                     "pet_passthrough" => {
                         let _ = pet_interaction::set(window.app_handle(), false);

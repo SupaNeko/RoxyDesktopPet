@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, OnceLock, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
@@ -12,8 +9,16 @@ pub struct PetHitTestState(Arc<RwLock<HitTestLayout>>);
 #[derive(Clone, Default)]
 struct HitTestLayout {
     passthrough: bool,
+    cursor_ignored: bool,
     interactive: Vec<Rect>,
     pet: Option<PetMask>,
+}
+
+impl HitTestLayout {
+    fn accepts_pointer(&self, x: f64, y: f64) -> bool {
+        self.interactive.iter().any(|rect| rect.contains(x, y))
+            || self.pet.as_ref().is_some_and(|pet| pet.contains(x, y))
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -62,41 +67,30 @@ impl Rect {
     }
 
     fn scaled(&self, scale: f64) -> Self {
-        Self {
-            x: self.x * scale,
-            y: self.y * scale,
-            width: self.width * scale,
-            height: self.height * scale,
-        }
+        Self { x: self.x * scale, y: self.y * scale, width: self.width * scale, height: self.height * scale }
     }
 }
 
 impl PetMask {
     fn contains(&self, x: f64, y: f64) -> bool {
-        if !self.rect.contains(x, y) || self.rect.width <= 0.0 || self.rect.height <= 0.0 {
-            return false;
-        }
+        if !self.rect.contains(x, y) || self.rect.width <= 0.0 || self.rect.height <= 0.0 { return false; }
         let px = ((x - self.rect.x) * self.image_width as f64 / self.rect.width) as usize;
         let py = ((y - self.rect.y) * self.image_height as f64 / self.rect.height) as usize;
-        self.rows
-            .get(py)
-            .is_some_and(|runs| runs.iter().any(|run| px >= run.start as usize && px < run.end as usize))
+        self.rows.get(py).is_some_and(|runs| runs.iter().any(|run| px >= run.start as usize && px < run.end as usize))
     }
 }
 
 pub fn update_layout(app: &AppHandle, request: LayoutRequest) -> Result<(), String> {
     let scale = request.scale_factor.max(0.1);
+    let state = app.state::<PetHitTestState>();
+    let previous = state.0.read().map_err(|_| "命中测试状态不可用")?.clone();
     let layout = HitTestLayout {
-        passthrough: app.state::<PetHitTestState>().0.read().map_err(|_| "命中测试状态不可用")?.passthrough,
+        passthrough: previous.passthrough,
+        cursor_ignored: previous.cursor_ignored,
         interactive: request.interactive.iter().map(|rect| rect.scaled(scale)).collect(),
-        pet: request.pet.map(|pet| PetMask {
-            rect: pet.rect.scaled(scale),
-            image_width: pet.image_width,
-            image_height: pet.image_height,
-            rows: pet.rows,
-        }),
+        pet: request.pet.map(|pet| PetMask { rect: pet.rect.scaled(scale), image_width: pet.image_width, image_height: pet.image_height, rows: pet.rows }),
     };
-    *app.state::<PetHitTestState>().0.write().map_err(|_| "命中测试状态不可用")? = layout;
+    *state.0.write().map_err(|_| "命中测试状态不可用")? = layout;
 
     let window = app.get_webview_window("pet").ok_or_else(|| "找不到桌宠窗口".to_string())?;
     let size = window.outer_size().map_err(|error| error.to_string())?;
@@ -112,47 +106,41 @@ pub fn update_pet_hit_test_layout(app: AppHandle, request: LayoutRequest) -> Res
     update_layout(&app, request)
 }
 
-
 pub fn set_passthrough(app: &AppHandle, enabled: bool) {
     if let Ok(mut layout) = app.state::<PetHitTestState>().0.write() {
         layout.passthrough = enabled;
+        layout.cursor_ignored = enabled;
     }
 }
 
+/// Called only from real low-level mouse events. It performs no work while the
+/// pointer remains in the same hit-test state, avoiding high-frequency IPC.
 #[cfg(windows)]
-struct WindowProcState { layout: Arc<RwLock<HitTestLayout>> }
-#[cfg(windows)] static WINDOW_PROCS: OnceLock<Mutex<HashMap<isize, WindowProcState>>> = OnceLock::new();
-#[cfg(windows)] const PET_SUBCLASS_ID: usize = 0x524F_5859;
-#[cfg(windows)] fn window_procs() -> &'static Mutex<HashMap<isize, WindowProcState>> { WINDOW_PROCS.get_or_init(|| Mutex::new(HashMap::new())) }
+pub fn update_mouse_position(app: &AppHandle, screen_x: i32, screen_y: i32) {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ScreenToClient};
+    let Some(window) = app.get_webview_window("pet") else { return; };
+    let Ok(hwnd) = window.hwnd() else { return; };
+    let mut point = POINT { x: screen_x, y: screen_y };
+    if unsafe { ScreenToClient(hwnd.0 as _, &mut point) } == 0 { return; }
 
-#[cfg(windows)]
-unsafe extern "system" fn pet_subclass_proc(hwnd: windows_sys::Win32::Foundation::HWND, message: u32, wparam: windows_sys::Win32::Foundation::WPARAM, lparam: windows_sys::Win32::Foundation::LPARAM, _: usize, _: usize) -> windows_sys::Win32::Foundation::LRESULT {
-    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ScreenToClient, UI::{Shell::{DefSubclassProc, RemoveWindowSubclass}, WindowsAndMessaging::{HTCLIENT, HTTRANSPARENT, WM_NCDESTROY, WM_NCHITTEST}}};
-    let layout = window_procs().lock().ok().and_then(|states| states.get(&(hwnd as isize)).map(|state| state.layout.clone()));
-    if message == WM_NCHITTEST {
-        if let Some(layout) = layout {
-            let mut point = POINT { x: lparam as i16 as i32, y: (lparam >> 16) as i16 as i32 };
-            if ScreenToClient(hwnd, &mut point) != 0 {
-                if let Ok(layout) = layout.read() {
-                    let x = point.x as f64; let y = point.y as f64;
-                    let interactive = layout.interactive.iter().any(|rect| rect.contains(x, y));
-                    let pet = layout.pet.as_ref().is_some_and(|pet| pet.contains(x, y));
-                    if layout.passthrough || (!interactive && !pet) { return HTTRANSPARENT as isize; }
-                    return HTCLIENT as isize;
-                }
-            }
+    let desired_ignore = match app.state::<PetHitTestState>().0.read() {
+        Ok(layout) => layout.passthrough || !layout.accepts_pointer(point.x as f64, point.y as f64),
+        Err(_) => return,
+    };
+    let changed = match app.state::<PetHitTestState>().0.write() {
+        Ok(mut layout) if layout.cursor_ignored != desired_ignore => { layout.cursor_ignored = desired_ignore; true }
+        Ok(_) => false,
+        Err(_) => return,
+    };
+    if changed {
+        if let Err(error) = window.set_ignore_cursor_events(desired_ignore) {
+            crate::logger::error(format!("切换桌宠鼠标穿透失败: {error}"));
         }
     }
-    if message == WM_NCDESTROY { let _ = RemoveWindowSubclass(hwnd, Some(pet_subclass_proc), PET_SUBCLASS_ID); if let Ok(mut states) = window_procs().lock() { states.remove(&(hwnd as isize)); } }
-    DefSubclassProc(hwnd, message, wparam, lparam)
 }
 
-#[cfg(windows)]
-pub fn install(window: &tauri::WebviewWindow, state: PetHitTestState) -> Result<(), String> {
-    use windows_sys::Win32::{Foundation::HWND, UI::Shell::SetWindowSubclass};
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-    window.run_on_main_thread(move || unsafe { let raw_hwnd = hwnd as HWND; if SetWindowSubclass(raw_hwnd, Some(pet_subclass_proc), PET_SUBCLASS_ID, 0) != 0 { if let Ok(mut states) = window_procs().lock() { states.insert(hwnd, WindowProcState { layout: state.0 }); } } }).map_err(|error| error.to_string())?;
-    Ok(())
-}
 #[cfg(not(windows))]
+pub fn update_mouse_position(_: &AppHandle, _: i32, _: i32) {}
+
+/// No window subclassing is needed: the global input hook drives hit testing.
 pub fn install(_: &tauri::WebviewWindow, _: PetHitTestState) -> Result<(), String> { Ok(()) }
