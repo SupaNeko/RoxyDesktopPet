@@ -53,6 +53,7 @@ export interface AppSettings {
   now_playing_enabled: boolean;
   voice_input_mode: 'disabled' | 'continuous' | 'push_to_talk';
   push_to_talk_shortcut: string;
+  pet_show_on_fullscreen: boolean;
 }
 
 export interface Message {

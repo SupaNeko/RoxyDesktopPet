@@ -110,6 +110,7 @@ pub struct SaveSettingsRequest {
     pub now_playing_enabled: bool,
     pub voice_input_mode: String,
     pub push_to_talk_shortcut: String,
+    pub pet_show_on_fullscreen: bool,
 }
 
 #[derive(Serialize)]
@@ -340,6 +341,7 @@ pub async fn save_settings(
             _ => "disabled".into(),
         },
         push_to_talk_shortcut: request.push_to_talk_shortcut,
+        pet_show_on_fullscreen: request.pet_show_on_fullscreen,
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());

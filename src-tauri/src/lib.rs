@@ -5,6 +5,7 @@ mod asr;
 mod audio;
 mod commands;
 mod db;
+mod fullscreen_watch;
 mod global_input;
 mod gpt_sovits;
 mod hook_server;
@@ -278,6 +279,7 @@ pub fn run() {
             // Pixel click-through is driven by real mouse events, not a polling loop.
             global_input::ensure_hooks();
             scheduler::start(app.handle().clone());
+            fullscreen_watch::start(app.handle().clone());
 
             // 恢复上次的语音输入方式（持续监听 / 按住说话快捷键）。
             {
