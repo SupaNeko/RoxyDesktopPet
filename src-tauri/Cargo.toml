@@ -42,6 +42,7 @@ windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse",
 # 只读系统感知：硬件占用（sysinfo）+ SMTC 当前播放（windows/WinRT）
 sysinfo = "0.39"
 windows = { version = "0.62", features = ["Foundation", "Media_Control", "Win32_System_Com"] }
+rmcp = { version = "2.2.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

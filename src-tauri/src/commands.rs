@@ -472,6 +472,9 @@ struct BilingualReply {
     chinese_text: String,
     japanese_text: String,
     emotion: String,
+    /// 需要反馈结果的复杂任务：委派给后台代理执行的任务描述。
+    #[serde(default)]
+    follow_up_task: Option<String>,
 }
 
 fn day_period_label(hour: u32) -> &'static str {
@@ -487,7 +490,7 @@ fn day_period_label(hour: u32) -> &'static str {
 }
 
 /// 带时段说明的本地时间描述，供系统提示词注入。
-fn local_time_description() -> String {
+pub(crate) fn local_time_description() -> String {
     use chrono::Timelike;
     let now = chrono::Local::now();
     format!(
@@ -568,7 +571,8 @@ async fn request_bilingual_reply(
                 "properties": {
                     "chinese_text": {"type":"string","description":"显示给用户的中文回复"},
                     "japanese_text": {"type":"string","description":"与中文含义相同、符合洛琪希口吻的自然日文回复"},
-                    "emotion": {"type":"string","enum":["shy","affectionate","sad","happy","calm","angry","battle","self_deprecating"]}
+                    "emotion": {"type":"string","enum":["shy","affectionate","sad","happy","calm","angry","battle","self_deprecating"]},
+                    "follow_up_task": {"type":"string","description":"仅当用户需求复杂、需要后台代理调用工具执行并把结果反馈给用户时，填写要委派的任务描述；其他情况不要填写"}
                 },
                 "required": ["chinese_text", "japanese_text", "emotion"],
                 "additionalProperties": false
@@ -651,6 +655,40 @@ async fn request_bilingual_reply(
 
     Err(format!("模型回复失败，已重试 3 次：{last_error}"))
 }
+/// 主聊天系统提示词的 MCP 段落：可用工具清单、两种调用方式说明、近期代理任务。
+fn build_mcp_context(tools: &[crate::mcp::McpToolEntry], runs: &[db::AgentRun]) -> String {
+    let mut out = String::new();
+    if !tools.is_empty() {
+        let list = tools
+            .iter()
+            .map(|t| format!("- {}（来自服务「{}」）", t.description, t.server_name))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!("\n【可用工具与任务委派】\n当前接入了以下 MCP 工具：\n{list}\n使用方式：\n1. 简单、可立即完成、不需要向用户汇报结果的动作（例如「帮我播放音乐」）：你只管自然回应即可，后台链路会自动调用合适的工具完成，不要在回复里声称你亲自执行了什么，也不要填写 follow_up_task。\n2. 复杂、需要查询或执行并把结果反馈给用户的任务（例如「今天天气怎么样」）：在正常回复用户的同时，把要执行的任务填到 reply_to_user 的 follow_up_task 字段委派给后台代理；代理完成后你会收到结果，再转告用户。委派时的回复要先告知用户你正在处理（例如「我查一下，稍后告诉你」）。\n没有把握用到上述工具的任务不要委派。"));
+    }
+    if !runs.is_empty() {
+        let items = runs
+            .iter()
+            .map(|r| {
+                let status = match r.status.as_str() {
+                    "running" => "进行中",
+                    "done" => "已完成",
+                    _ => "失败",
+                };
+                let summary = if r.summary.is_empty() {
+                    "（暂无结论）".into()
+                } else {
+                    r.summary.chars().take(200).collect::<String>()
+                };
+                format!("- [{status}] 任务「{}」：{summary}", r.task)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.push_str(&format!("\n【近期后台代理任务】\n{items}"));
+    }
+    out
+}
+
 fn normalize_emotion(value: &str) -> String {
     match value.trim().to_lowercase().as_str() {
         "shy" | "害羞" => "shy",
@@ -733,9 +771,17 @@ async fn process_message(
     } else {
         String::new()
     };
+    // MCP 能力注入：可用工具清单 + 两种调用方式说明 + 近期代理任务结论。
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    let mcp_tools = crate::mcp::available_tools(mcp_state.inner()).await;
+    let agent_runs = {
+        let conn = db_state.0.lock().await;
+        db::list_recent_agent_runs(&conn, 3).unwrap_or_default()
+    };
+    let mcp_context = build_mcp_context(&mcp_tools, &agent_runs);
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
-        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
-        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, system_context
+        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
+        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, system_context, mcp_context
     )})];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
@@ -758,6 +804,26 @@ async fn process_message(
         db::insert_message(&conn, &assistant).map_err(|e| e.to_string())?;
     }
     schedule_tool_audit(app.clone(), user.id.clone());
+    // 复杂任务委派：主聊天已先回复，后台代理带 MCP 工具执行，完成后再次触发主聊天反馈。
+    if let Some(task) = reply
+        .follow_up_task
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        if mcp_tools.is_empty() {
+            log_warn!("模型委派的代理任务被忽略（无可用 MCP 工具）：{task}");
+        } else {
+            let run = {
+                let conn = db_state.0.lock().await;
+                db::insert_agent_run(&conn, task)
+            };
+            match run {
+                Ok(run) => crate::agent::schedule(app.clone(), run.id, task.to_string()),
+                Err(error) => log_error!("创建代理任务失败：{error}"),
+            }
+        }
+    }
     Ok(assistant)
 }
 
@@ -784,13 +850,27 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
         )
     };
     apply_memory_env(&mut settings, memory_env.inner());
-    let tools = vec![
+    // MCP 工具注入：简单、无需反馈的动作由审计链路在后台直接完成。
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    let mcp_tools = crate::mcp::available_tools(mcp_state.inner()).await;
+    let mcp_prompt = if mcp_tools.is_empty() {
+        String::new()
+    } else {
+        let list = mcp_tools
+            .iter()
+            .map(|t| format!("- {}：{}", t.prefixed_name, t.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n此外还有一些 MCP 工具（名称以 mcp__ 开头）：\n{list}\n当且仅当用户的请求是一个简单、可以立即完成、且不需要向用户汇报结果的动作（例如播放音乐），并且有合适的 MCP 工具时，直接调用该工具完成；不要为此创建待办，也不要输出任何文字。拿不准、或需要把结果反馈给用户的任务，都不要调用 MCP 工具。")
+    };
+    let mut tools = vec![
         serde_json::json!({"type":"function","function":{"name":"create_todo","description":"创建一个到点提醒用户的待办事项；用户要求「每隔多久重复提醒」时填 repeat_every_minutes 创建循环待办","parameters":{"type":"object","properties":{"title":{"type":"string"},"due_at":{"type":"string","description":"首次提醒时间，含时区的 RFC3339 时间"},"timezone":{"type":"string"},"repeat_every_minutes":{"type":"number","description":"循环间隔（分钟），仅当用户明确要求重复提醒时填写"}},"required":["title","due_at"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"list_todos","description":"查看尚未完成的提醒事项（含循环待办及其 id）","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"delete_todo","description":"删除一个待办（包括循环待办）。必须先用 list_todos 拿到待办 id","parameters":{"type":"object","properties":{"todo_id":{"type":"string","description":"list_todos 返回的待办 id"}},"required":["todo_id"],"additionalProperties":false}}}),
     ];
+    tools.extend(mcp_tools.iter().map(|t| t.to_openai_tool()));
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」；用户要求「每隔 N 分钟/小时/天提醒我……」这类循环提醒时，额外填 repeat_every_minutes（换算成分钟）。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n只有用户明确要求删除、取消某个待办或循环提醒时才调用 delete_todo，且必须先调用 list_todos 确认要删的待办 id；用户描述模糊、匹配不到唯一待办时不要删。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",local_time_description())}),
+        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」；用户要求「每隔 N 分钟/小时/天提醒我……」这类循环提醒时，额外填 repeat_every_minutes（换算成分钟）。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n只有用户明确要求删除、取消某个待办或循环提醒时才调用 delete_todo，且必须先调用 list_todos 确认要删的待办 id；用户描述模糊、匹配不到唯一待办时不要删。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。{}",local_time_description(),mcp_prompt)}),
     ];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
@@ -887,6 +967,12 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                         "已删除".to_string()
                     } else {
                         "未找到该待办（可能已删除或已完成）".to_string()
+                    }
+                }
+                _ if name.starts_with("mcp__") => {
+                    match crate::mcp::call_tool(mcp_state.inner(), name, args).await {
+                        Ok(text) => text,
+                        Err(error) => format!("MCP 工具调用失败：{error}"),
                     }
                 }
                 _ => return Err(format!("不允许的工具：{name}")),
@@ -1259,9 +1345,312 @@ pub async fn get_now_playing(
     crate::media_control::now_playing().await
 }
 
+#[derive(Debug, Deserialize)]
+pub struct McpServerRequest {
+    pub name: String,
+    pub transport: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: String,
+    #[serde(default)]
+    pub env: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub headers: String,
+    /// 非空时忽略其余字段，直接按 JSON 配置解析（支持标准 mcpServers 包装）。
+    #[serde(default)]
+    pub config_json: String,
+}
+
+/// JSON 对象 → 每行一条 KEY=VALUE（值非字符串时取 JSON 表示）。
+fn json_object_to_lines(value: Option<&serde_json::Value>) -> String {
+    value
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| {
+                    let value = v.as_str().map(String::from).unwrap_or_else(|| v.to_string());
+                    format!("{k}={value}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// 解析标准 MCP JSON 配置：支持裸服务器对象 {url|command, ...} 与
+/// {"mcpServers": {"名称": {...}}} 包装（取第一个条目，键作为默认名称）。
+pub(crate) fn parse_mcp_config_json(raw: &str) -> Result<db::McpServerInput, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw.trim()).map_err(|e| format!("JSON 无效：{e}"))?;
+    let (name_from_key, server) = if let Some(servers) =
+        value.get("mcpServers").and_then(|v| v.as_object())
+    {
+        let (key, server) = servers.iter().next().ok_or("mcpServers 为空")?;
+        (Some(key.clone()), server.clone())
+    } else {
+        (None, value)
+    };
+    let obj = server.as_object().ok_or("MCP 配置必须是 JSON 对象")?;
+    let name = obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or(name_from_key)
+        .unwrap_or_default();
+    if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
+        return Ok(db::McpServerInput {
+            name,
+            transport: "remote".into(),
+            command: String::new(),
+            args: String::new(),
+            env: String::new(),
+            url: url.trim().into(),
+            headers: json_object_to_lines(obj.get("headers")),
+        });
+    }
+    if let Some(command) = obj.get("command").and_then(|v| v.as_str()) {
+        // args 以 JSON 数组原样存储，保留含空格的参数。
+        let args = obj
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| serde_json::to_string(arr).unwrap_or_default())
+            .unwrap_or_default();
+        return Ok(db::McpServerInput {
+            name,
+            transport: "stdio".into(),
+            command: command.trim().into(),
+            args,
+            env: json_object_to_lines(obj.get("env")),
+            url: String::new(),
+            headers: String::new(),
+        });
+    }
+    Err("JSON 中需要 url（远程）或 command（本地命令）字段".into())
+}
+
+fn validate_mcp_request(request: &McpServerRequest) -> Result<db::McpServerInput, String> {
+    let input = if request.config_json.trim().is_empty() {
+        db::McpServerInput {
+            name: request.name.trim().into(),
+            transport: request.transport.trim().into(),
+            command: request.command.trim().into(),
+            args: request.args.trim().into(),
+            env: request.env.trim().into(),
+            url: request.url.trim().into(),
+            headers: request.headers.trim().into(),
+        }
+    } else {
+        parse_mcp_config_json(&request.config_json)?
+    };
+    if input.name.is_empty() {
+        return Err("名称不能为空（JSON 中可提供 name 字段或使用 mcpServers 包装）".into());
+    }
+    if !matches!(input.transport.as_str(), "stdio" | "remote") {
+        return Err("类型必须是 stdio（本地命令）或 remote（远程服务）".into());
+    }
+    if input.transport == "stdio" && input.command.is_empty() {
+        return Err("本地 MCP 需要填写启动命令".into());
+    }
+    if input.transport == "remote"
+        && !(input.url.starts_with("http://") || input.url.starts_with("https://"))
+    {
+        return Err("远程 MCP 地址必须以 http:// 或 https:// 开头".into());
+    }
+    for (field, raw) in [("环境变量", &input.env), ("请求头", &input.headers)] {
+        for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if !line.contains('=') {
+                return Err(format!("{field}格式错误：每行应为 KEY=VALUE（「{line}」）"));
+            }
+        }
+    }
+    Ok(input)
+}
+
+fn map_mcp_db_error(error: rusqlite::Error) -> String {
+    if error.to_string().contains("UNIQUE constraint failed") {
+        "已存在同名 MCP 服务器".into()
+    } else {
+        error.to_string()
+    }
+}
+
+async fn mcp_server_status(
+    app: &AppHandle,
+    db_state: &DbState,
+    id: i64,
+) -> Result<crate::mcp::McpServerStatus, String> {
+    let server = {
+        let conn = db_state.0.lock().await;
+        db::get_mcp_server(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("MCP 服务器不存在")?
+    };
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    let mut statuses = crate::mcp::statuses(mcp_state.inner(), vec![server]).await;
+    Ok(statuses.remove(0))
+}
+
+#[tauri::command]
+pub async fn list_mcp_servers(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<crate::mcp::McpServerStatus>, String> {
+    let servers = {
+        let conn = db_state.0.lock().await;
+        db::list_mcp_servers(&conn).map_err(|e| e.to_string())?
+    };
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    Ok(crate::mcp::statuses(mcp_state.inner(), servers).await)
+}
+
+#[tauri::command]
+pub async fn add_mcp_server(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    request: McpServerRequest,
+) -> Result<crate::mcp::McpServerStatus, String> {
+    let input = validate_mcp_request(&request)?;
+    let server = {
+        let conn = db_state.0.lock().await;
+        db::insert_mcp_server(&conn, &input).map_err(map_mcp_db_error)?
+    };
+    // 新增默认启用：远程立即动态载入；stdio 记入运行时（重启后拉起）。
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    crate::mcp::set_enabled(mcp_state.inner(), &server).await;
+    let _ = app.emit("mcp-servers-changed", server.id);
+    mcp_server_status(&app, db_state.inner(), server.id).await
+}
+
+#[tauri::command]
+pub async fn update_mcp_server(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    id: i64,
+    request: McpServerRequest,
+) -> Result<crate::mcp::McpServerStatus, String> {
+    let input = validate_mcp_request(&request)?;
+    let changed = {
+        let conn = db_state.0.lock().await;
+        db::update_mcp_server(&conn, id, &input).map_err(map_mcp_db_error)?
+    };
+    if !changed {
+        return Err("MCP 服务器不存在".into());
+    }
+    let server = {
+        let conn = db_state.0.lock().await;
+        db::get_mcp_server(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("MCP 服务器不存在")?
+    };
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    crate::mcp::reconcile_updated(mcp_state.inner(), &server).await;
+    let _ = app.emit("mcp-servers-changed", id);
+    mcp_server_status(&app, db_state.inner(), id).await
+}
+
+#[tauri::command]
+pub async fn remove_mcp_server(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    id: i64,
+) -> Result<bool, String> {
+    let removed = {
+        let conn = db_state.0.lock().await;
+        db::delete_mcp_server(&conn, id).map_err(|e| e.to_string())?
+    };
+    if removed {
+        let mcp_state = app.state::<crate::mcp::McpState>();
+        crate::mcp::remove(mcp_state.inner(), id).await;
+        let _ = app.emit("mcp-servers-changed", id);
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+pub async fn set_mcp_server_enabled(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    id: i64,
+    enabled: bool,
+) -> Result<crate::mcp::McpServerStatus, String> {
+    {
+        let conn = db_state.0.lock().await;
+        if !db::set_mcp_server_enabled(&conn, id, enabled).map_err(|e| e.to_string())? {
+            return Err("MCP 服务器不存在".into());
+        }
+    }
+    let server = {
+        let conn = db_state.0.lock().await;
+        db::get_mcp_server(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or("MCP 服务器不存在")?
+    };
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    crate::mcp::set_enabled(mcp_state.inner(), &server).await;
+    let _ = app.emit("mcp-servers-changed", id);
+    mcp_server_status(&app, db_state.inner(), id).await
+}
+
+#[tauri::command]
+pub async fn list_mcp_server_tools(
+    app: AppHandle,
+    id: i64,
+) -> Result<Vec<crate::mcp::McpToolInfo>, String> {
+    let mcp_state = app.state::<crate::mcp::McpState>();
+    Ok(crate::mcp::server_tools(mcp_state.inner(), id).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_remote_json_with_headers() {
+        let input = parse_mcp_config_json(
+            r#"{
+  "url": "https://mcp-weather.caiyunapp.com/mcp",
+  "headers": { "X-Caiyun-API-Key": "YOUR_KEY" }
+}"#,
+        )
+        .unwrap();
+        assert_eq!(input.transport, "remote");
+        assert_eq!(input.url, "https://mcp-weather.caiyunapp.com/mcp");
+        assert_eq!(input.headers, "X-Caiyun-API-Key=YOUR_KEY");
+        // 缺名称时走校验报错
+        assert!(validate_mcp_request(&McpServerRequest {
+            name: String::new(),
+            transport: "remote".into(),
+            command: String::new(),
+            args: String::new(),
+            env: String::new(),
+            url: String::new(),
+            headers: String::new(),
+            config_json: r#"{"url":"https://a.com/mcp"}"#.into(),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn parses_mcpservers_wrapper_and_stdio_json() {
+        let input = parse_mcp_config_json(
+            r#"{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","D:\\work dir"],"env":{"FOO":"bar"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(input.name, "filesystem");
+        assert_eq!(input.transport, "stdio");
+        assert_eq!(input.command, "npx");
+        // args 保留为 JSON 数组，含空格参数不丢失
+        assert!(input.args.starts_with('['));
+        assert!(input.args.contains("work dir"));
+        let parsed: Vec<String> = serde_json::from_str(&input.args).unwrap();
+        assert_eq!(parsed, vec!["-y", "@modelcontextprotocol/server-filesystem", "D:\\work dir"]);
+        assert_eq!(input.env, "FOO=bar");
+    }
+
     #[test]
     fn normalizes_model_emotions_for_voice_routing() {
         assert_eq!(normalize_emotion("高兴"), "happy");

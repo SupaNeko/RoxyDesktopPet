@@ -89,6 +89,44 @@ export interface ToolHookToolInfo { id: string; name: string; items: ToolHookIte
 
 export interface TaskbarApp { title: string; process_name: string; pid: number; foreground: boolean; }
 
+export type McpTransport = 'stdio' | 'remote';
+export type McpConnectionStatus = 'disabled' | 'connected' | 'pending_restart' | 'error';
+
+export interface McpServer {
+  id: number;
+  name: string;
+  transport: McpTransport;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface McpServerStatus extends McpServer {
+  status: McpConnectionStatus;
+  tool_count: number;
+  requires_restart: boolean;
+  error: string | null;
+}
+
+export interface McpServerRequest {
+  name: string;
+  transport: McpTransport;
+  command: string;
+  args: string;
+  env: string;
+  url: string;
+  headers: string;
+  /** 非空时后端忽略其余字段，直接按 JSON 配置解析 */
+  config_json?: string;
+}
+
+export interface McpToolInfo { name: string; description: string; }
+
 export interface HardwareStats {
   cpu_usage_percent: number;
   memory_used_mb: number;

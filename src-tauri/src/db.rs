@@ -151,6 +151,47 @@ pub struct Todo {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServer {
+    pub id: i64,
+    pub name: String,
+    /// "stdio" | "remote"
+    pub transport: String,
+    pub command: String,
+    /// 空格分隔的参数（stdio 用）
+    pub args: String,
+    /// 每行一条 KEY=VALUE（stdio 用）
+    pub env: String,
+    pub url: String,
+    /// 每行一条 KEY=VALUE（remote 请求头用）
+    pub headers: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct McpServerInput {
+    pub name: String,
+    pub transport: String,
+    pub command: String,
+    pub args: String,
+    pub env: String,
+    pub url: String,
+    pub headers: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRun {
+    pub id: i64,
+    pub task: String,
+    /// "running" | "done" | "error"
+    pub status: String,
+    pub summary: String,
+    pub created_at: i64,
+    pub finished_at: Option<i64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DueReminder {
     pub occurrence_id: String,
@@ -191,6 +232,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS memory_observer_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_message_rowid INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
          INSERT OR IGNORE INTO scheduler_state(id, proactive_count) VALUES(1, 0);
          INSERT OR IGNORE INTO memory_observer_state(id) VALUES(1);
+         CREATE TABLE IF NOT EXISTS mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL, command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, finished_at INTEGER);
          CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
          CREATE INDEX IF NOT EXISTS idx_occurrences_due ON reminder_occurrences(status, scheduled_at_utc);",
     )?;
@@ -332,6 +375,18 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     if !todo_columns.iter().any(|name| name == "repeat_interval_minutes") {
         conn.execute(
             "ALTER TABLE todos ADD COLUMN repeat_interval_minutes INTEGER",
+            [],
+        )?;
+    }
+    // mcp_servers 的增量列迁移（老库补 headers 列）。
+    let mcp_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(mcp_servers)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !mcp_columns.iter().any(|name| name == "headers") {
+        conn.execute(
+            "ALTER TABLE mcp_servers ADD COLUMN headers TEXT NOT NULL DEFAULT ''",
             [],
         )?;
     }
@@ -625,6 +680,125 @@ pub fn claim_proactive_due(
     Ok(true)
 }
 
+fn row_to_mcp_server(r: &rusqlite::Row) -> rusqlite::Result<McpServer> {
+    Ok(McpServer {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        transport: r.get(2)?,
+        command: r.get(3)?,
+        args: r.get(4)?,
+        env: r.get(5)?,
+        url: r.get(6)?,
+        headers: r.get(7)?,
+        enabled: r.get::<_, i32>(8)? != 0,
+        created_at: r.get(9)?,
+        updated_at: r.get(10)?,
+    })
+}
+
+const MCP_SERVER_COLUMNS: &str =
+    "id,name,transport,command,args,env,url,headers,enabled,created_at,updated_at";
+
+pub fn list_mcp_servers(conn: &Connection) -> rusqlite::Result<Vec<McpServer>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MCP_SERVER_COLUMNS} FROM mcp_servers ORDER BY id"
+    ))?;
+    let rows = stmt.query_map([], row_to_mcp_server)?.collect();
+    rows
+}
+
+pub fn get_mcp_server(conn: &Connection, id: i64) -> rusqlite::Result<Option<McpServer>> {
+    conn.query_row(
+        &format!("SELECT {MCP_SERVER_COLUMNS} FROM mcp_servers WHERE id=?"),
+        [id],
+        row_to_mcp_server,
+    )
+    .optional()
+}
+
+pub fn insert_mcp_server(conn: &Connection, input: &McpServerInput) -> rusqlite::Result<McpServer> {
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO mcp_servers(name,transport,command,args,env,url,headers,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)",
+        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, now],
+    )?;
+    let id = conn.last_insert_rowid();
+    get_mcp_server(conn, id)?.ok_or_else(|| {
+        rusqlite::Error::QueryReturnedNoRows
+    })
+}
+
+pub fn update_mcp_server(conn: &Connection, id: i64, input: &McpServerInput) -> rusqlite::Result<bool> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let changed = conn.execute(
+        "UPDATE mcp_servers SET name=?,transport=?,command=?,args=?,env=?,url=?,headers=?,updated_at=? WHERE id=?",
+        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, id],
+    )?;
+    Ok(changed > 0)
+}
+
+pub fn delete_mcp_server(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    Ok(conn.execute("DELETE FROM mcp_servers WHERE id=?", [id])? > 0)
+}
+
+pub fn set_mcp_server_enabled(conn: &Connection, id: i64, enabled: bool) -> rusqlite::Result<bool> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let changed = conn.execute(
+        "UPDATE mcp_servers SET enabled=?,updated_at=? WHERE id=?",
+        params![enabled as i32, now, id],
+    )?;
+    Ok(changed > 0)
+}
+
+pub fn insert_agent_run(conn: &Connection, task: &str) -> rusqlite::Result<AgentRun> {
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO agent_runs(task,status,summary,created_at) VALUES(?,'running','',?)",
+        params![task, now],
+    )?;
+    Ok(AgentRun {
+        id: conn.last_insert_rowid(),
+        task: task.into(),
+        status: "running".into(),
+        summary: String::new(),
+        created_at: now,
+        finished_at: None,
+    })
+}
+
+pub fn finish_agent_run(
+    conn: &Connection,
+    id: i64,
+    status: &str,
+    summary: &str,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "UPDATE agent_runs SET status=?,summary=?,finished_at=? WHERE id=?",
+        params![status, summary, now, id],
+    )?;
+    Ok(())
+}
+
+pub fn list_recent_agent_runs(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<AgentRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT id,task,status,summary,created_at,finished_at FROM agent_runs ORDER BY id DESC LIMIT ?",
+    )?;
+    let rows = stmt
+        .query_map([limit.min(50)], |r| {
+            Ok(AgentRun {
+                id: r.get(0)?,
+                task: r.get(1)?,
+                status: r.get(2)?,
+                summary: r.get(3)?,
+                created_at: r.get(4)?,
+                finished_at: r.get(5)?,
+            })
+        })?
+        .collect();
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,6 +878,47 @@ mod tests {
         );
         // 重复删除返回 false。
         assert!(!delete_todo(&conn, &todo.id).unwrap());
+    }
+
+    #[test]
+    fn mcp_server_crud_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("test.db")).unwrap();
+        let input = McpServerInput {
+            name: "music".into(),
+            transport: "remote".into(),
+            command: String::new(),
+            args: String::new(),
+            env: String::new(),
+            url: "http://127.0.0.1:9000/mcp".into(),
+            headers: "X-Api-Key=abc".into(),
+        };
+        let server = insert_mcp_server(&conn, &input).unwrap();
+        assert!(server.enabled);
+        assert_eq!(list_mcp_servers(&conn).unwrap().len(), 1);
+        // 名称唯一约束
+        assert!(insert_mcp_server(&conn, &input).is_err());
+        set_mcp_server_enabled(&conn, server.id, false).unwrap();
+        assert!(!get_mcp_server(&conn, server.id).unwrap().unwrap().enabled);
+        let renamed = McpServerInput { name: "music2".into(), ..input };
+        assert!(update_mcp_server(&conn, server.id, &renamed).unwrap());
+        assert_eq!(get_mcp_server(&conn, server.id).unwrap().unwrap().name, "music2");
+        assert!(delete_mcp_server(&conn, server.id).unwrap());
+        assert!(list_mcp_servers(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn agent_run_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("test.db")).unwrap();
+        let run = insert_agent_run(&conn, "查天气").unwrap();
+        assert_eq!(run.status, "running");
+        finish_agent_run(&conn, run.id, "done", "晴 25°C").unwrap();
+        let runs = list_recent_agent_runs(&conn, 3).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "done");
+        assert_eq!(runs[0].summary, "晴 25°C");
+        assert!(runs[0].finished_at.is_some());
     }
 
     #[test]

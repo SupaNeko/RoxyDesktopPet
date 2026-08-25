@@ -3,9 +3,9 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
-  import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, Trash2, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying } from './lib/api';
-  import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
+  import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Trash2, X } from 'lucide-svelte';
+  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools } from './lib/api';
+  import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
   let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true });
@@ -34,7 +34,61 @@
   let capturingShortcut = $state(false);
   let shortcutCaptureCommittedAt = 0;
   let todos = $state<Todo[]>([]);
-  let settingsTab = $state<'general' | 'toolhook'>('general');
+  let settingsTab = $state<'general' | 'toolhook' | 'mcp'>('general');
+  let mcpServers = $state<McpServerStatus[]>([]);
+  let mcpEditing = $state<number | 'new' | null>(null);
+  const emptyMcpForm = (): McpServerRequest => ({ name: '', transport: 'remote', command: '', args: '', env: '', url: '', headers: '' });
+  let mcpForm = $state<McpServerRequest>(emptyMcpForm());
+  let mcpFormMode = $state<'form' | 'json'>('form');
+  let mcpJson = $state('');
+  const linesToRecord = (raw: string): Record<string, string> => Object.fromEntries(raw.split('\n').map((l) => l.trim()).filter((l) => l.includes('=')).map((l) => { const i = l.indexOf('='); return [l.slice(0, i).trim(), l.slice(i + 1).trim()]; }));
+  function mcpFormToJson(): string {
+    if (mcpForm.transport === 'remote') {
+      const headers = linesToRecord(mcpForm.headers);
+      return JSON.stringify({ name: mcpForm.name, url: mcpForm.url, ...(Object.keys(headers).length ? { headers } : {}) }, null, 2);
+    }
+    let args: string[] = [];
+    try { args = mcpForm.args.trim().startsWith('[') ? JSON.parse(mcpForm.args) : mcpForm.args.split(/\s+/).filter(Boolean); } catch { args = mcpForm.args.split(/\s+/).filter(Boolean); }
+    const env = linesToRecord(mcpForm.env);
+    return JSON.stringify({ name: mcpForm.name, command: mcpForm.command, args, ...(Object.keys(env).length ? { env } : {}) }, null, 2);
+  }
+  function switchMcpFormMode(mode: 'form' | 'json') { if (mode === 'json' && mcpFormMode === 'form') mcpJson = mcpFormToJson(); mcpFormMode = mode; }
+  let mcpBusy = $state<number | 'new' | null>(null);
+  let mcpToolsFor = $state<number | null>(null);
+  let mcpTools = $state<McpToolInfo[]>([]);
+  async function loadMcpServers() {
+    try { mcpServers = await listMcpServers(); } catch (e) { error = String(e); }
+  }
+  function startAddMcp() { mcpEditing = 'new'; mcpForm = emptyMcpForm(); mcpFormMode = 'form'; mcpJson = ''; error = ''; }
+  function startEditMcp(server: McpServerStatus) {
+    mcpEditing = server.id; error = ''; mcpFormMode = 'form'; mcpJson = '';
+    mcpForm = { name: server.name, transport: server.transport, command: server.command, args: server.args, env: server.env, url: server.url, headers: server.headers };
+  }
+  async function saveMcpServer() {
+    if (mcpEditing === null || mcpBusy !== null) return;
+    mcpBusy = mcpEditing; error = '';
+    const request: McpServerRequest = mcpFormMode === 'json' ? { ...emptyMcpForm(), config_json: mcpJson } : mcpForm;
+    try {
+      if (mcpEditing === 'new') await addMcpServer(request); else await updateMcpServer(mcpEditing, request);
+      mcpEditing = null;
+      await loadMcpServers();
+    } catch (e) { error = String(e); } finally { mcpBusy = null; }
+  }
+  async function toggleMcpServer(server: McpServerStatus) {
+    if (mcpBusy !== null) return;
+    mcpBusy = server.id; error = '';
+    try { await setMcpServerEnabled(server.id, !server.enabled); await loadMcpServers(); } catch (e) { error = String(e); } finally { mcpBusy = null; }
+  }
+  async function deleteMcpServer(server: McpServerStatus) {
+    if (mcpBusy !== null || !window.confirm(`确定删除 MCP 服务器「${server.name}」吗？`)) return;
+    mcpBusy = server.id; error = '';
+    try { await removeMcpServer(server.id); if (mcpEditing === server.id) mcpEditing = null; if (mcpToolsFor === server.id) mcpToolsFor = null; await loadMcpServers(); } catch (e) { error = String(e); } finally { mcpBusy = null; }
+  }
+  async function toggleMcpTools(id: number) {
+    if (mcpToolsFor === id) { mcpToolsFor = null; return; }
+    mcpToolsFor = id; mcpTools = []; error = '';
+    try { mcpTools = await listMcpServerTools(id); } catch (e) { error = String(e); }
+  }
   let toolHookTools = $state<ToolHookToolInfo[]>([]);
   let toolHookToolId = $state('opencode');
   let toolHookBusy = $state('');
@@ -108,7 +162,7 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
     if (label === 'settings') loadToolHookSupport();
     return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
@@ -204,6 +258,7 @@
     <nav class="settings-tabs">
       <button class:on={settingsTab === 'general'} onclick={() => settingsTab = 'general'}>常规</button>
       <button class:on={settingsTab === 'toolhook'} onclick={() => { settingsTab = 'toolhook'; loadToolHookSupport(); }}>编程联动</button>
+      <button class:on={settingsTab === 'mcp'} onclick={() => { settingsTab = 'mcp'; loadMcpServers(); }}>MCP 服务</button>
     </nav>
     {#if settingsTab === 'general'}
     <section><h2>角色</h2>
@@ -299,6 +354,49 @@
         {/if}
       </div>
     </section>
+    {:else if settingsTab === 'mcp'}
+    <section><h2>MCP 服务</h2>
+      {#each mcpServers as server (server.id)}
+        <div class="tool-hook-item">
+          <div class="tool-hook-row">
+            <strong>{server.name}<span class="mcp-kind">{server.transport === 'stdio' ? '本地' : '远程'}</span></strong>
+            <span class="status-badge" class:configured={server.status === 'connected'} class:needs_update={server.status === 'pending_restart' || server.requires_restart} class:error={server.status === 'error'}>
+              {server.status === 'connected' ? `已连接 · ${server.tool_count} 工具` : server.status === 'disabled' ? '已停用' : server.status === 'error' ? '连接失败' : '重启后生效'}
+            </span>
+          </div>
+          <p class="note">
+            {#if server.status === 'error'}{server.error ?? '连接失败'}
+            {:else if server.transport === 'stdio'}{server.command} {server.args}{server.requires_restart ? ' · 修改将在重启后生效' : ''}
+            {:else}{server.url}{server.headers.trim() ? ' · 已配置请求头' : ''}{/if}
+          </p>
+          <div class="tool-hook-actions">
+            <button class="option mcp-toggle" class:on={server.enabled} onclick={() => toggleMcpServer(server)} disabled={mcpBusy !== null}>
+              <span><strong>{server.enabled ? '已启用' : '已停用'}</strong><small>{server.enabled ? '工具已注入 AI' : '工具不注入 AI'}</small></span>
+            </button>
+            <button type="button" class="ghost-button" onclick={() => toggleMcpTools(server.id)} disabled={server.status !== 'connected'}>{mcpToolsFor === server.id ? '收起工具' : '查看工具'}</button>
+            <button type="button" class="ghost-button" onclick={() => startEditMcp(server)} disabled={mcpBusy !== null}>编辑</button>
+            <button type="button" class="ghost-button" onclick={() => deleteMcpServer(server)} disabled={mcpBusy !== null}>删除</button>
+          </div>
+          {#if mcpToolsFor === server.id}
+            <div class="mcp-tools">
+              {#if mcpTools.length === 0}<p class="note">未发现工具。</p>{:else}
+                {#each mcpTools as tool (tool.name)}<p class="note"><strong>{tool.name}</strong>{tool.description ? ` — ${tool.description}` : ''}</p>{/each}
+              {/if}
+            </div>
+          {/if}
+          {#if mcpEditing === server.id}
+            {@render mcpFormSnippet()}
+          {/if}
+        </div>
+      {/each}
+      {#if mcpServers.length === 0}<p class="note">还没有 MCP 服务器。添加后，洛琪希就能通过它们使用外部工具（查天气、播放音乐等）。</p>{/if}
+      {#if mcpEditing === 'new'}
+        <div class="tool-hook-item">{@render mcpFormSnippet()}</div>
+      {:else}
+        <button type="button" class="test-button mcp-add" onclick={startAddMcp} disabled={mcpBusy !== null}><Plus size={13} /> 添加 MCP 服务器</button>
+      {/if}
+      <p class="note">本地 MCP 跟随应用启动，新增或修改后重启生效；远程 MCP（http 服务）即时连接生效。开关即时生效：只有已启用且已连接的服务器才会把工具注入 AI。</p>
+    </section>
     {:else}
     <section><h2>编程联动提醒</h2>
       <button class="option" class:on={settings.tool_hook_enabled} onclick={() => settings.tool_hook_enabled = !settings.tool_hook_enabled}>
@@ -381,6 +479,38 @@
   </main>
 {/if}
 
+{#snippet mcpFormSnippet()}
+  <div class="mcp-form">
+    <div class="voice-modes">
+      <label><input type="radio" bind:group={mcpFormMode} value="form" onchange={() => switchMcpFormMode('form')} />表单</label>
+      <label><input type="radio" bind:group={mcpFormMode} value="json" onchange={() => switchMcpFormMode('json')} />JSON 导入</label>
+    </div>
+    {#if mcpFormMode === 'json'}
+      <label>MCP JSON 配置<textarea class="mcp-json" bind:value={mcpJson} placeholder={'{\n  "url": "https://example.com/mcp",\n  "headers": { "X-Api-Key": "…" }\n}'}></textarea></label>
+      <p class="note">支持裸服务器对象（含 url 视为远程、含 command 视为本地）以及标准的 {"{"}"mcpServers": {"{"}"名称": {"{"}…{"}"}}} 包装；名称取自 name 字段或包装键。保存时以后端解析结果为准。</p>
+    {:else}
+    <label>名称<input bind:value={mcpForm.name} placeholder="例如 music、weather" /></label>
+    <div class="voice-modes">
+      <label><input type="radio" bind:group={mcpForm.transport} value="remote" />远程（http）</label>
+      <label><input type="radio" bind:group={mcpForm.transport} value="stdio" />本地命令</label>
+    </div>
+    {#if mcpForm.transport === 'remote'}
+      <label>服务地址<input bind:value={mcpForm.url} placeholder="https://example.com/mcp" /></label>
+      <label>请求头（每行 KEY=VALUE）<textarea bind:value={mcpForm.headers} placeholder={'X-Api-Key=你的密钥'}></textarea></label>
+    {:else}
+      <label>启动命令<input bind:value={mcpForm.command} placeholder="例如 npx、uvx、python" /></label>
+      <label>命令参数（空格分隔，或 JSON 数组）<input bind:value={mcpForm.args} placeholder="例如 -y @modelcontextprotocol/server-everything" /></label>
+      <label>环境变量（每行 KEY=VALUE）<textarea bind:value={mcpForm.env} placeholder="可留空"></textarea></label>
+    {/if}
+    {/if}
+    <div class="tool-hook-actions">
+      <button type="button" class="test-button" onclick={saveMcpServer} disabled={mcpBusy !== null}>{mcpBusy !== null ? '保存中…' : '保存'}</button>
+      <button type="button" class="ghost-button" onclick={() => mcpEditing = null} disabled={mcpBusy !== null}>取消</button>
+    </div>
+    <p class="note">{mcpFormMode === 'json' ? '远程 MCP 保存后立即连接生效；本地 MCP 重启应用后生效。' : mcpForm.transport === 'remote' ? '远程 MCP 保存后立即连接生效。' : '本地 MCP 保存后重启应用生效。'}</p>
+  </div>
+{/snippet}
+
 <style>
   .device-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
   .device-row select { min-width: 0; border: 1px solid #d3c6b8; border-radius: 9px; padding: 9px 10px; color: #39332d; background: #fffaf3; }
@@ -454,4 +584,11 @@
   .ghost-button { border: 1px solid #d3c6b8; border-radius: 9px; padding: 8px 13px; color: #5e554d; background: #fffaf3; }
   .ghost-button:disabled { opacity: .5; cursor: default; }
   .settings-page select { width: 100%; border: 1px solid #d3c6b8; border-radius: 9px; padding: 9px 10px; color: #39332d; background: #fffaf3; }
+  .mcp-kind { margin-left: 6px; padding: 2px 7px; border-radius: 999px; font-size: 10px; color: #8d563f; background: #f3e4da; }
+  .mcp-toggle { width: auto; padding: 6px 10px; }
+  .mcp-toggle span { display: grid; gap: 1px; text-align: left; }
+  .mcp-tools { margin-top: 8px; padding: 8px 10px; border: 1px dashed #d8cab9; border-radius: 9px; }
+  .mcp-form { display: grid; gap: 10px; margin-top: 10px; }
+  .mcp-add { display: inline-flex; align-items: center; gap: 5px; }
+  .mcp-json { min-height: 150px; font-family: Consolas, monospace; font-size: 12px; }
   .system-preview { white-space: pre-wrap; overflow-wrap: anywhere; }</style>

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, HardwareStats, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
+import type { AppSettings, HardwareStats, McpServerRequest, McpServerStatus, McpToolInfo, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -88,6 +88,19 @@ export async function listToolHookSupport(): Promise<ToolHookToolInfo[]> { retur
 export async function writeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('write_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
 export async function removeToolHookConfig(tool: string, item: string): Promise<ToolHookStatus> { return inTauri() ? invoke('remove_tool_hook_config', { tool, item }) : { status: 'not_configured', detail: '非 Tauri 环境' }; }
 export async function testToolHook(tool: string): Promise<void> { if (inTauri()) await invoke('test_tool_hook', { tool }); }
+
+export async function listMcpServers(): Promise<McpServerStatus[]> { return inTauri() ? invoke('list_mcp_servers') : []; }
+export async function addMcpServer(request: McpServerRequest): Promise<McpServerStatus> {
+  if (!inTauri()) return { id: Date.now(), ...request, enabled: true, created_at: Date.now(), updated_at: Date.now(), status: 'pending_restart', tool_count: 0, requires_restart: request.transport === 'stdio', error: null };
+  return invoke('add_mcp_server', { request });
+}
+export async function updateMcpServer(id: number, request: McpServerRequest): Promise<McpServerStatus> {
+  if (!inTauri()) return { id, ...request, enabled: true, created_at: Date.now(), updated_at: Date.now(), status: 'pending_restart', tool_count: 0, requires_restart: request.transport === 'stdio', error: null };
+  return invoke('update_mcp_server', { id, request });
+}
+export async function removeMcpServer(id: number): Promise<boolean> { return inTauri() ? invoke('remove_mcp_server', { id }) : true; }
+export async function setMcpServerEnabled(id: number, enabled: boolean): Promise<McpServerStatus | null> { return inTauri() ? invoke('set_mcp_server_enabled', { id, enabled }) : null; }
+export async function listMcpServerTools(id: number): Promise<McpToolInfo[]> { return inTauri() ? invoke('list_mcp_server_tools', { id }) : []; }
 
 export async function getTaskbarApps(): Promise<TaskbarApp[]> { return inTauri() ? invoke('get_taskbar_apps') : []; }
 export async function getHardwareStats(): Promise<HardwareStats> { return inTauri() ? invoke('get_hardware_stats') : { cpu_usage_percent: 0, memory_used_mb: 0, memory_total_mb: 0, gpu_name: null, gpu_usage_percent: null, gpu_memory_used_mb: null, gpu_memory_total_mb: null, gpu_temperature_celsius: null }; }

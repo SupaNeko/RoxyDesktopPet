@@ -1,6 +1,7 @@
 #[macro_use]
 mod logger;
 
+mod agent;
 mod asr;
 mod audio;
 mod commands;
@@ -10,6 +11,7 @@ mod global_input;
 mod gpt_sovits;
 mod hook_server;
 mod media_control;
+mod mcp;
 mod memory;
 mod memory_store;
 mod native_hit_test;
@@ -249,6 +251,7 @@ pub fn run() {
         .ok()
         .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
     let memory_env = memory_env_config();
+    let mcp_servers = db::list_mcp_servers(&db).unwrap_or_default();
 
     tauri::Builder::default()
         // Command state must exist before setup because configured webviews can load
@@ -265,6 +268,7 @@ pub fn run() {
         .manage(ConversationState(Mutex::new(())))
         .manage(voice_output::VoiceOutputState::new(&data_dir()))
         .manage(tool_hook::ToolHookState::default())
+        .manage(mcp::McpState::default())
         .setup(move |app| {
             if voice_enabled {
                 let voice_app = app.handle().clone();
@@ -353,6 +357,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 tool_hook::reconcile_server(&hook_app).await;
             });
+
+            // 启动时拉起已启用的 MCP 服务器（stdio 子进程 + 远程连接）。
+            mcp::bootstrap(app.handle().clone(), mcp_servers.clone());
 
             if let Some(settings_window) = app.get_webview_window("settings") {
                 let window_to_hide = settings_window.clone();
@@ -470,6 +477,8 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move {
                             let voice = handle.state::<gpt_sovits::GptSoVitsState>();
                             gpt_sovits::shutdown(voice.inner()).await;
+                            let mcp_state = handle.state::<mcp::McpState>();
+                            mcp::shutdown(mcp_state.inner()).await;
                             handle.exit(0);
                         });
                     }
@@ -522,6 +531,12 @@ pub fn run() {
             commands::get_taskbar_apps,
             commands::get_hardware_stats,
             commands::get_now_playing,
+            commands::list_mcp_servers,
+            commands::add_mcp_server,
+            commands::update_mcp_server,
+            commands::remove_mcp_server,
+            commands::set_mcp_server_enabled,
+            commands::list_mcp_server_tools,
             pet_interaction::set_mouse_passthrough,
             pet_interaction::get_mouse_passthrough,
             native_hit_test::update_pet_hit_test_layout
