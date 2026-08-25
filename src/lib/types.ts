@@ -41,7 +41,6 @@ export interface AppSettings {
   tool_hook_enabled: boolean;
   tool_hook_mode: 'fixed' | 'ai';
   tool_hook_port: number;
-  tool_hook_token_enabled: boolean;
   tool_hook_fixed_text: string;
   tool_hook_fixed_voice_text: string;
   tool_hook_include_last_message: boolean;

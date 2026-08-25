@@ -98,7 +98,6 @@ pub struct SaveSettingsRequest {
     pub tool_hook_enabled: bool,
     pub tool_hook_mode: String,
     pub tool_hook_port: u32,
-    pub tool_hook_token_enabled: bool,
     pub tool_hook_fixed_text: String,
     pub tool_hook_fixed_voice_text: String,
     pub tool_hook_include_last_message: bool,
@@ -205,7 +204,6 @@ pub async fn get_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
-    settings.tool_hook_token.clear();
     Ok(settings)
 }
 
@@ -260,11 +258,6 @@ pub async fn save_settings(
         }
     } else {
         request.tts_api_key.trim().into()
-    };
-    let tool_hook_token = if existing.tool_hook_token.is_empty() {
-        uuid::Uuid::new_v4().simple().to_string()
-    } else {
-        existing.tool_hook_token.clone()
     };
     let mut settings = AppSettings {
         pet_name: ROXY_NAME.into(),
@@ -330,8 +323,6 @@ pub async fn save_settings(
             "fixed".into()
         },
         tool_hook_port: request.tool_hook_port.clamp(1, 65535),
-        tool_hook_token,
-        tool_hook_token_enabled: request.tool_hook_token_enabled,
         tool_hook_fixed_text: request.tool_hook_fixed_text.trim().to_string(),
         tool_hook_fixed_voice_text: request.tool_hook_fixed_voice_text.trim().to_string(),
         tool_hook_include_last_message: request.tool_hook_include_last_message,
@@ -376,7 +367,6 @@ pub async fn save_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
-    settings.tool_hook_token.clear();
     Ok(settings)
 }
 

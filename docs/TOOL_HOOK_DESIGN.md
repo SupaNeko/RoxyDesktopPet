@@ -55,11 +55,11 @@
 │ Codex notify 脚本 (后续)                 │
 │   └─ curl → POST 同一端口                 │
 └──────────────────────────────────────────┘
-                    │ 统一事件 JSON + 可选 Token 头
+                    │ 统一事件 JSON（仅本机回环，无 Token）
                     ▼
 ┌─ 桌宠侧 (Rust/Tauri 后端) ──────────────┐
 │ hook_server.rs  本地 HTTP 监听器          │
-│   └─ 校验 Token/路径/体大小/超时 → HookEvent│
+│   └─ 校验 路径/体大小/超时 → HookEvent  │
 │ tool_hook.rs    事件处理管线               │
 │   └─ 去重/提醒间隔/每日上限 → 去抖 → 生成消息
 │        ├─ 固定模式: 模板替换               │
@@ -82,7 +82,6 @@
 
 ```json
 POST /hook/opencode
-X-ChatPet-Token: <可选 token>
 Content-Type: application/json
 
 {
@@ -123,16 +122,14 @@ Content-Type: application/json
 - 绑定地址固定 `127.0.0.1`；端口来自设置（默认 `34125`）。
 - 每连接读取超时 5s，请求体上限 64KB，超过返回 413。
 - 仅接受 `POST`；路径前缀 `/hook/`，工具名白名单校验。
-- 响应统一 `application/json`：`200 {"ok":true}` / `400` / `401` / `413` / `404`。
+- 响应统一 `application/json`：`200 {"ok":true}` / `400` / `413` / `404`。
 - `GET /health` 返回 `{"ok":true}`，供设置页状态检查与调试。
 - 绑定失败（端口被占用）不崩溃：状态置 `error`，设置页展示，用户改端口或关闭。
 
-### 5.3 Token 校验
+### 5.3 鉴权说明
 
-- 首次启用时后端生成随机 Token（32 hex），存入设置（前端不回显，仅显示"已启用"）。
-- 生成的各工具 hook 配置中嵌入该 Token（插件内 / curl 头 / HTTP hook header）。
-- 服务器对 `X-ChatPet-Token` 常量时间比较，不匹配返回 401。
-- 提供"简单校验"开关，关闭后跳过（本机回环默认安全）。
+- 服务器只绑定 `127.0.0.1` 本机回环，不接受外部连接，因此**不做 Token 校验**（曾因数据库重建导致 Token 漂移、hook 静默 401 失效，属于过度设计，已移除）。
+- 端口仍来自设置（默认 `34125`）；`reconcile_server` 在启动和保存设置时检测外部工具 hook 脚本中的端口，过期则自动重写（自愈），无需重启对应工具。
 
 ## 6. 事件处理管线
 

@@ -30,7 +30,7 @@ pub struct HookEvent {
 pub struct ToolHookState {
     running: AtomicBool,
     handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-    active_config: Mutex<Option<(u32, String, bool)>>,
+    active_config: Mutex<Option<u32>>,
     last_notify: Mutex<HashMap<String, i64>>,
     debounce_gen: Mutex<HashMap<String, u64>>,
     daily: Mutex<(String, u32)>,
@@ -56,11 +56,7 @@ pub async fn reconcile_server(app: &AppHandle) {
     );
     let state = app.state::<ToolHookState>();
     let want = settings.tool_hook_enabled;
-    let cfg = Some((
-        settings.tool_hook_port,
-        settings.tool_hook_token.clone(),
-        settings.tool_hook_token_enabled,
-    ));
+    let cfg = Some(settings.tool_hook_port);
     let running = state.running.load(Ordering::SeqCst);
     let config_changed = {
         let active = state.active_config.lock().await;
@@ -72,6 +68,20 @@ pub async fn reconcile_server(app: &AppHandle) {
         start_server(app, &settings).await;
     } else if !want && running {
         stop_server(&state).await;
+    }
+
+    // 自动自愈：外部工具里的 hook 脚本端口过期（needs_update）时，用当前设置重写。
+    // 脚本是 ChatPet 写入的（带 marker），重写安全；脚本路径不变，无需重启对应工具。
+    for tool in crate::tool_hook_config::list_supported(&settings) {
+        for item in tool.items {
+            if item.status != "needs_update" {
+                continue;
+            }
+            match crate::tool_hook_config::write(&tool.id, &item.id, &settings) {
+                Ok(_) => log_info!("tool_hook: 已自动修复 {} 的 hook 配置（端口对齐 {}）", tool.id, settings.tool_hook_port),
+                Err(error) => log_error!("tool_hook: 自动修复 {} 失败：{error}", tool.id),
+            }
+        }
     }
 }
 
@@ -91,19 +101,10 @@ async fn start_server(app: &AppHandle, settings: &AppSettings) {
             let _ = handle_event(&app, &tool, &body).await;
         });
     });
-    let handle = hook_server::spawn(
-        listener,
-        settings.tool_hook_token.clone(),
-        settings.tool_hook_token_enabled,
-        handler,
-    );
+    let handle = hook_server::spawn(listener, handler);
     let state = app.state::<ToolHookState>();
     *state.handle.lock().await = Some(handle);
-    *state.active_config.lock().await = Some((
-        settings.tool_hook_port,
-        settings.tool_hook_token.clone(),
-        settings.tool_hook_token_enabled,
-    ));
+    *state.active_config.lock().await = Some(settings.tool_hook_port);
     state.running.store(true, Ordering::SeqCst);
 }
 

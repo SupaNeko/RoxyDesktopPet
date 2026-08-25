@@ -163,7 +163,7 @@ fn opencode_plugin_file() -> PathBuf {
     xdg_dir.join(OPENCODE_PLUGIN_FILE)
 }
 
-fn opencode_plugin_content(port: u32, token: &str) -> String {
+fn opencode_plugin_content(port: u32) -> String {
     format!(
         r#"// chatpet-hook — written by ChatPet
 export const ChatPetHook = async ({{ project, directory }}) => {{
@@ -184,7 +184,7 @@ export const ChatPetHook = async ({{ project, directory }}) => {{
       try {{
         await fetch("http://127.0.0.1:{port}/hook/opencode", {{
           method: "POST",
-          headers: {{ "content-type": "application/json", "x-chatpet-token": "{token}" }},
+          headers: {{ "content-type": "application/json" }},
           body: JSON.stringify({{
             tool: "opencode",
             event: kind,
@@ -214,7 +214,7 @@ fn opencode_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("插件文件存在但不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || !content.contains(&format!("\"x-chatpet-token\": \"{}\"", settings.tool_hook_token))
+        || content.contains("x-chatpet-token")
     {
         return ToolHookStatus::needs_update();
     }
@@ -232,7 +232,7 @@ fn opencode_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
             backup_existing(&file)?;
         }
     }
-    let content = opencode_plugin_content(settings.tool_hook_port, &settings.tool_hook_token);
+    let content = opencode_plugin_content(settings.tool_hook_port);
     write_file_atomic(&file, &content)?;
     let written = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
     if !written.contains(OPENCODE_MARKER) {
@@ -267,9 +267,9 @@ fn codex_hooks_json() -> PathBuf {
     codex_dir().join(CODEX_HOOKS_JSON)
 }
 
-fn codex_script_content(port: u32, token: &str) -> String {
+fn codex_script_content(port: u32) -> String {
     format!(
-        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"codex\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/codex\" -Method POST -ContentType \"application/json\" -Headers @{{ \"x-chatpet-token\" = \"{token}\" }} -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
+        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"codex\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/codex\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
     )
 }
 
@@ -383,7 +383,7 @@ fn codex_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("通知脚本不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || !content.contains(&format!("\"x-chatpet-token\" = \"{}\"", settings.tool_hook_token))
+        || content.contains("x-chatpet-token")
     {
         return ToolHookStatus::needs_update();
     }
@@ -401,7 +401,7 @@ fn codex_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
             backup_existing(&script)?;
         }
     }
-    let content = codex_script_content(settings.tool_hook_port, &settings.tool_hook_token);
+    let content = codex_script_content(settings.tool_hook_port);
     write_file_atomic(&script, &content)?;
 
     let hooks_path = codex_hooks_json();
@@ -446,9 +446,9 @@ fn kimi_config_toml() -> PathBuf {
     kimi_dir().join("config.toml")
 }
 
-fn kimi_script_content(port: u32, token: &str) -> String {
+fn kimi_script_content(port: u32) -> String {
     format!(
-        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"kimi\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/kimi\" -Method POST -ContentType \"application/json\" -Headers @{{ \"x-chatpet-token\" = \"{token}\" }} -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
+        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"kimi\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/kimi\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
     )
 }
 
@@ -548,7 +548,7 @@ fn kimi_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("通知脚本不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || !content.contains(&format!("\"x-chatpet-token\" = \"{}\"", settings.tool_hook_token))
+        || content.contains("x-chatpet-token")
     {
         return ToolHookStatus::needs_update();
     }
@@ -566,7 +566,7 @@ fn kimi_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
             backup_existing(&script)?;
         }
     }
-    let content = kimi_script_content(settings.tool_hook_port, &settings.tool_hook_token);
+    let content = kimi_script_content(settings.tool_hook_port);
     write_file_atomic(&script, &content)?;
 
     let config = kimi_config_toml();
