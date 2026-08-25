@@ -19,7 +19,12 @@ use tokio::sync::Mutex;
 
 const CONNECT_TIMEOUT_STDIO: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT_REMOTE: Duration = Duration::from_secs(15);
-const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// 默认单次工具调用超时；每台服务器可在设置中覆盖（1~3600 秒）。
+const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn call_timeout(server: &McpServer) -> Duration {
+    Duration::from_secs(server.timeout_seconds.clamp(1, 3600) as u64)
+}
 
 #[derive(Default)]
 pub struct McpState {
@@ -33,6 +38,8 @@ struct ServerRuntime {
     tools: Vec<Tool>,
     name: String,
     enabled: bool,
+    /// 单次工具调用超时（随配置更新即时生效）。
+    call_timeout: Duration,
     /// 配置在运行期被修改，重启后才会按新配置重连。
     stale: bool,
     error: Option<String>,
@@ -46,6 +53,7 @@ impl ServerRuntime {
             tools: Vec::new(),
             name,
             enabled,
+            call_timeout: DEFAULT_CALL_TIMEOUT,
             stale: false,
             error: None,
         }
@@ -239,6 +247,7 @@ async fn store_connected(
         .or_insert_with(|| ServerRuntime::new(server.name.clone(), server.enabled));
     entry.name = server.name.clone();
     entry.enabled = server.enabled;
+    entry.call_timeout = call_timeout(server);
     cancel_entry(entry).await;
     match result {
         Ok((service, tools)) => {
@@ -286,6 +295,7 @@ pub async fn set_enabled(state: &McpState, server: &McpServer) {
         .or_insert_with(|| ServerRuntime::new(server.name.clone(), server.enabled));
     entry.name = server.name.clone();
     entry.enabled = server.enabled;
+    entry.call_timeout = call_timeout(server);
     if !server.enabled {
         // stdio 进程保留（跟随启动生命周期），远程断开。
         if server.transport == "remote" {
@@ -306,6 +316,7 @@ pub async fn reconcile_updated(state: &McpState, server: &McpServer) {
         .or_insert_with(|| ServerRuntime::new(server.name.clone(), server.enabled));
     entry.name = server.name.clone();
     entry.enabled = server.enabled;
+    entry.call_timeout = call_timeout(server);
     entry.stale = true;
 }
 
@@ -361,7 +372,7 @@ pub async fn call_tool(
     prefixed_name: &str,
     args: serde_json::Value,
 ) -> Result<String, String> {
-    let (peer, original_name) = {
+    let (peer, original_name, timeout) = {
         let inner = state.inner.lock().await;
         let mut found = None;
         for entry in inner.values() {
@@ -370,7 +381,10 @@ pub async fn call_tool(
             }
             for tool in &entry.tools {
                 if prefixed_tool_name(&entry.name, tool.name.as_ref()) == prefixed_name {
-                    found = entry.peer.clone().map(|peer| (peer, tool.name.to_string()));
+                    found = entry
+                        .peer
+                        .clone()
+                        .map(|peer| (peer, tool.name.to_string(), entry.call_timeout));
                     break;
                 }
             }
@@ -384,9 +398,9 @@ pub async fn call_tool(
     if let Some(arguments) = args.as_object().cloned() {
         params = params.with_arguments(arguments);
     }
-    let result = tokio::time::timeout(CALL_TIMEOUT, peer.call_tool(params))
+    let result = tokio::time::timeout(timeout, peer.call_tool(params))
         .await
-        .map_err(|_| format!("MCP 工具调用超时：{prefixed_name}"))?
+        .map_err(|_| format!("MCP 工具调用超时（{} 秒）：{prefixed_name}", timeout.as_secs()))?
         .map_err(|e| format!("MCP 工具调用失败：{e}"))?;
     let mut text = result
         .content

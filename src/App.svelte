@@ -8,7 +8,7 @@
   import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
-  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_fixed_text: '你在 {tool} 里 {project} 的任务已经完成了。', tool_hook_fixed_voice_text: '', tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true });
+  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30 });
   let runtime = $state<RuntimeStatus | null>(null), messages = $state<Message[]>([]);
   let text = $state(''), error = $state('');
   let busy = $state(false), bubbleVisible = $state(false), composerVisible = $state(false), saved = $state(false);
@@ -37,7 +37,7 @@
   let settingsTab = $state<'general' | 'toolhook' | 'mcp'>('general');
   let mcpServers = $state<McpServerStatus[]>([]);
   let mcpEditing = $state<number | 'new' | null>(null);
-  const emptyMcpForm = (): McpServerRequest => ({ name: '', transport: 'remote', command: '', args: '', env: '', url: '', headers: '' });
+  const emptyMcpForm = (): McpServerRequest => ({ name: '', transport: 'remote', command: '', args: '', env: '', url: '', headers: '', timeout_seconds: 120 });
   let mcpForm = $state<McpServerRequest>(emptyMcpForm());
   let mcpFormMode = $state<'form' | 'json'>('form');
   let mcpJson = $state('');
@@ -45,12 +45,12 @@
   function mcpFormToJson(): string {
     if (mcpForm.transport === 'remote') {
       const headers = linesToRecord(mcpForm.headers);
-      return JSON.stringify({ name: mcpForm.name, url: mcpForm.url, ...(Object.keys(headers).length ? { headers } : {}) }, null, 2);
+      return JSON.stringify({ name: mcpForm.name, url: mcpForm.url, ...(Object.keys(headers).length ? { headers } : {}), ...(mcpForm.timeout_seconds !== 120 ? { timeout: mcpForm.timeout_seconds } : {}) }, null, 2);
     }
     let args: string[] = [];
     try { args = mcpForm.args.trim().startsWith('[') ? JSON.parse(mcpForm.args) : mcpForm.args.split(/\s+/).filter(Boolean); } catch { args = mcpForm.args.split(/\s+/).filter(Boolean); }
     const env = linesToRecord(mcpForm.env);
-    return JSON.stringify({ name: mcpForm.name, command: mcpForm.command, args, ...(Object.keys(env).length ? { env } : {}) }, null, 2);
+    return JSON.stringify({ name: mcpForm.name, command: mcpForm.command, args, ...(Object.keys(env).length ? { env } : {}), ...(mcpForm.timeout_seconds !== 120 ? { timeout: mcpForm.timeout_seconds } : {}) }, null, 2);
   }
   function switchMcpFormMode(mode: 'form' | 'json') { if (mode === 'json' && mcpFormMode === 'form') mcpJson = mcpFormToJson(); mcpFormMode = mode; }
   let mcpBusy = $state<number | 'new' | null>(null);
@@ -62,7 +62,7 @@
   function startAddMcp() { mcpEditing = 'new'; mcpForm = emptyMcpForm(); mcpFormMode = 'form'; mcpJson = ''; error = ''; }
   function startEditMcp(server: McpServerStatus) {
     mcpEditing = server.id; error = ''; mcpFormMode = 'form'; mcpJson = '';
-    mcpForm = { name: server.name, transport: server.transport, command: server.command, args: server.args, env: server.env, url: server.url, headers: server.headers };
+    mcpForm = { name: server.name, transport: server.transport, command: server.command, args: server.args, env: server.env, url: server.url, headers: server.headers, timeout_seconds: server.timeout_seconds };
   }
   async function saveMcpServer() {
     if (mcpEditing === null || mcpBusy !== null) return;
@@ -94,8 +94,14 @@
   let toolHookBusy = $state('');
   let toolHookTesting = $state(false);
   const toolHookTool = $derived(toolHookTools.find((t) => t.id === toolHookToolId));
+  // 当前选中工具的文本配置条目；留空表示使用该工具的默认语句。
+  const toolHookTextEntry = $derived(settings.tool_hook_tool_texts[toolHookToolId]);
   async function loadToolHookSupport() {
-    try { toolHookTools = await listToolHookSupport(); } catch (e) { error = String(e); }
+    try {
+      toolHookTools = await listToolHookSupport();
+      // 为每个已接入工具补齐可编辑的文本配置条目。
+      for (const tool of toolHookTools) settings.tool_hook_tool_texts[tool.id] ??= { fixed_text: '', fixed_voice_text: '' };
+    } catch (e) { error = String(e); }
   }
   async function writeHook(itemId: string) {
     toolHookBusy = itemId; error = '';
@@ -285,6 +291,24 @@
       <div class="model-summary"><strong>{settings.api_model || '未配置'}</strong><small>{settings.api_base_url}</small><span class:ready={settings.api_key_configured}>{settings.api_key_configured ? '已从 .env 读取 API Key' : '.env 缺少 API Key'}</span></div>
       <p class="note">模型连接由项目根目录的 .env 管理。修改后请完全退出并重新启动 ChatPet。</p>
     </section>
+    <section><h2>联网搜索</h2>
+      <label>搜索服务商
+        <select bind:value={settings.search_provider}>
+          <option value="">关闭</option>
+          <option value="bocha">博查</option>
+          <option value="tavily">Tavily</option>
+        </select>
+      </label>
+      {#if settings.search_provider}
+        <label>搜索 API Key<input type="password" bind:value={settings.search_api_key} autocomplete="new-password" placeholder={settings.search_api_configured ? '留空则保持现有配置' : '请输入 API Key'} /></label>
+        <label>自定义接口地址（可选）<input bind:value={settings.search_base_url} placeholder={settings.search_provider === 'bocha' ? 'https://api.bochaai.com/v1/web-search' : 'https://api.tavily.com/search'} /></label>
+      {/if}
+      <p class="note">配置后，洛琪希可以把需要联网的任务（如天气、新闻）委派给后台代理搜索，再由她转告你；未配置时，她会如实告诉你时效性问题答不上来。</p>
+    </section>
+    <section><h2>后台代理</h2>
+      <label>最大工具调用轮数<input type="number" min="1" max="100" bind:value={settings.agent_max_tool_rounds} /></label>
+      <p class="note">后台代理执行联网搜索、MCP 等委派任务时，最多进行多少轮工具调用。轮数耗尽后会基于已获得的信息强制给出结论。</p>
+    </section>
     <section><h2>长期记忆</h2>
       <div class="model-summary"><strong>本地长期记忆</strong><small>SQLite 存储 · 观察者独占维护</small><span class:ready={runtime?.memory_status === 'available'}>{runtime?.memory_status === 'available' ? '可用' : '尚未配置 Embedding'}</span></div>
       <label>Embedding API 地址<input bind:value={settings.embedding_base_url} placeholder="OpenAI-compatible base URL" /></label>
@@ -418,16 +442,18 @@
         </div>
       {/each}
       <p class="note">一键配置会写入该软件的 hook 配置，删除配置会恢复原状。写入后需重启对应软件生效（Codex 首次还需在 /hooks 里信任一次）。</p>
+      {#if settings.tool_hook_mode === 'fixed' && toolHookTool && toolHookTextEntry}
+        <label>{toolHookTool.name} 固定提示文本<textarea bind:value={settings.tool_hook_tool_texts[toolHookToolId].fixed_text} placeholder={toolHookTool.default_fixed_text}></textarea></label>
+        <label>{toolHookTool.name} 语音文本（日文，GPT-SoVITS 用）<input bind:value={settings.tool_hook_tool_texts[toolHookToolId].fixed_voice_text} placeholder={toolHookTool.default_fixed_voice_text} /></label>
+        <p class="note">每个软件的提示文本独立配置，留空使用默认语句；支持 {'{tool}'} {'{project}'} {'{event}'} {'{time}'} 占位符。</p>
+      {/if}
     </section>
     <section><h2>提醒方式</h2>
       <div class="voice-modes">
         <label><input type="radio" bind:group={settings.tool_hook_mode} value="fixed" />固定提示（不调用 AI）</label>
         <label><input type="radio" bind:group={settings.tool_hook_mode} value="ai" />消息提示（AI 动态生成）</label>
       </div>
-      {#if settings.tool_hook_mode === 'fixed'}
-        <label>固定提示文本<textarea bind:value={settings.tool_hook_fixed_text} placeholder={'支持 {tool} {project} 占位符'}></textarea></label>
-        <label>语音文本（日文，GPT-SoVITS 用）<input bind:value={settings.tool_hook_fixed_voice_text} placeholder="可留空" /></label>
-      {:else}
+      {#if settings.tool_hook_mode === 'ai'}
         <button class="option" class:on={settings.tool_hook_include_last_message} onclick={() => settings.tool_hook_include_last_message = !settings.tool_hook_include_last_message}>
           <span><strong>附带最后一条助手消息摘要</strong><small>{settings.tool_hook_include_last_message ? 'AI 会参考该摘要生成提示' : '仅提供工具与项目信息，更保守'}</small></span>
         </button>
@@ -494,6 +520,7 @@
       <label><input type="radio" bind:group={mcpForm.transport} value="remote" />远程（http）</label>
       <label><input type="radio" bind:group={mcpForm.transport} value="stdio" />本地命令</label>
     </div>
+    <label>工具调用超时（秒）<input type="number" min="1" max="3600" bind:value={mcpForm.timeout_seconds} /></label>
     {#if mcpForm.transport === 'remote'}
       <label>服务地址<input bind:value={mcpForm.url} placeholder="https://example.com/mcp" /></label>
       <label>请求头（每行 KEY=VALUE）<textarea bind:value={mcpForm.headers} placeholder={'X-Api-Key=你的密钥'}></textarea></label>

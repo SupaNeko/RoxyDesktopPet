@@ -8,8 +8,6 @@ use crate::mcp::{self, McpState};
 use crate::ModelConfig;
 use tauri::{AppHandle, Emitter, Manager};
 
-const MAX_TOOL_ROUNDS: usize = 8;
-
 pub fn schedule(app: AppHandle, run_id: i64, task: String) {
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_agent_task(&app, run_id, &task).await {
@@ -29,22 +27,37 @@ async fn run_agent_task(app: &AppHandle, run_id: i64, task: &str) -> Result<(), 
     }
     let mcp_state = app.state::<McpState>();
     let tools = mcp::available_tools(mcp_state.inner()).await;
-    if tools.is_empty() {
-        return Err("没有可用的 MCP 工具".into());
+    let (search_config, max_rounds) = {
+        let db_state = app.state::<DbState>();
+        let conn = db_state.0.lock().await;
+        let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+        (
+            crate::search::SearchConfig::from_settings(&settings),
+            settings.agent_max_tool_rounds.clamp(1, 100) as usize,
+        )
+    };
+    if tools.is_empty() && search_config.is_none() {
+        return Err("没有可用的 MCP 工具或联网搜索".into());
     }
-    let tool_json: Vec<serde_json::Value> = tools.iter().map(|t| t.to_openai_tool()).collect();
-    let tool_summary = tools
-        .iter()
-        .map(|t| format!("- {}：{}", t.prefixed_name, t.description))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut tool_json: Vec<serde_json::Value> = tools.iter().map(|t| t.to_openai_tool()).collect();
+    let mut summary_lines: Vec<String> = Vec::new();
+    if search_config.is_some() {
+        tool_json.push(crate::search::web_search_tool_schema());
+        summary_lines.push("- web_search：联网搜索，获取天气、新闻、资料等时效性信息".into());
+    }
+    summary_lines.extend(
+        tools
+            .iter()
+            .map(|t| format!("- {}：{}", t.prefixed_name, t.description)),
+    );
+    let tool_summary = summary_lines.join("\n");
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是桌宠洛琪希的后台任务执行代理。当前时间：{}，时区 Asia/Shanghai。你的任务是使用 MCP 工具完成用户委托的事项，并给出简洁准确的文字结论。\n可用工具：\n{}\n规则：优先调用工具获取真实结果，不要编造；工具失败后换一种参数或工具重试，仍失败就在结论里说明失败原因；结论用中文，直接给结果，不要复述任务。", crate::commands::local_time_description(), tool_summary)}),
+        serde_json::json!({"role":"system","content":format!("你是桌宠洛琪希的后台任务执行代理。当前时间：{}，时区 Asia/Shanghai。你的任务是使用可用工具完成用户委托的事项，并给出简洁准确的文字结论。\n可用工具：\n{}\n规则：优先调用工具获取真实结果，不要编造；工具失败后换一种参数或工具重试，仍失败就在结论里说明失败原因；结论用中文，直接给结果，不要复述任务。", crate::commands::local_time_description(), tool_summary)}),
         serde_json::json!({"role":"user","content":task}),
     ];
     let client = reqwest::Client::new();
     let mut summary = String::new();
-    for _ in 0..MAX_TOOL_ROUNDS {
+    for _ in 0..max_rounds {
         let response = client
             .post(format!("{}/chat/completions", model.base_url))
             .bearer_auth(&model.api_key)
@@ -99,11 +112,51 @@ async fn run_agent_task(app: &AppHandle, run_id: i64, task: &str) -> Result<(), 
             )
             .unwrap_or(serde_json::json!({}));
             log_info!("agent task {run_id} call: {name}");
-            let result = match mcp::call_tool(mcp_state.inner(), name, args).await {
-                Ok(text) => text,
-                Err(error) => format!("调用失败：{error}"),
+            let result = if name == "web_search" {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or_default();
+                match &search_config {
+                    Some(config) => crate::search::web_search(&client, config, query)
+                        .await
+                        .unwrap_or_else(|error| format!("搜索失败：{error}")),
+                    None => "搜索失败：联网搜索未配置".into(),
+                }
+            } else {
+                match mcp::call_tool(mcp_state.inner(), name, args).await {
+                    Ok(text) => text,
+                    Err(error) => format!("调用失败：{error}"),
+                }
             };
+            log_info!(
+                "agent task {run_id} result: {}",
+                result.chars().take(200).collect::<String>()
+            );
             messages.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":result}));
+        }
+    }
+    if summary.trim().is_empty() {
+        // 轮数耗尽：不带工具再请求一次，强制模型基于已获得的信息给出结论。
+        log_warn!("agent task {run_id} reached max tool rounds ({max_rounds}), forcing final summary");
+        messages.push(serde_json::json!({"role":"user","content":"工具调用次数已用完。请根据目前已经获得的信息直接给出文字结论；如果工具一直在报错或信息不足，就在结论里如实说明原因，不要再尝试调用工具。"}));
+        let response = client
+            .post(format!("{}/chat/completions", model.base_url))
+            .bearer_auth(&model.api_key)
+            .json(&serde_json::json!({
+                "model": model.model,
+                "messages": messages,
+                "temperature": 0.2,
+                "thinking": {"type":"disabled"}
+            }))
+            .send()
+            .await;
+        if let Ok(response) = response {
+            if let Ok(body) = response.json::<serde_json::Value>().await {
+                summary = body
+                    .pointer("/choices/0/message/content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+            }
         }
     }
     if summary.trim().is_empty() {

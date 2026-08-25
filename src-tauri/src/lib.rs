@@ -18,6 +18,7 @@ mod native_hit_test;
 mod observer;
 mod pet_interaction;
 mod scheduler;
+mod search;
 mod system_monitor;
 mod tool_hook;
 mod tool_hook_config;

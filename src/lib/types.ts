@@ -41,8 +41,7 @@ export interface AppSettings {
   tool_hook_enabled: boolean;
   tool_hook_mode: 'fixed' | 'ai';
   tool_hook_port: number;
-  tool_hook_fixed_text: string;
-  tool_hook_fixed_voice_text: string;
+  tool_hook_tool_texts: Record<string, ToolHookToolText>;
   tool_hook_include_last_message: boolean;
   tool_hook_min_interval_minutes: number;
   tool_hook_daily_limit: number;
@@ -54,6 +53,11 @@ export interface AppSettings {
   voice_input_mode: 'disabled' | 'continuous' | 'push_to_talk';
   push_to_talk_shortcut: string;
   pet_show_on_fullscreen: boolean;
+  search_provider: '' | 'bocha' | 'tavily';
+  search_api_key: string;
+  search_base_url: string;
+  search_api_configured: boolean;
+  agent_max_tool_rounds: number;
 }
 
 export interface Message {
@@ -85,7 +89,8 @@ export interface Todo { id: string; title: string; due_at_utc: number; timezone:
 
 export interface ToolHookStatus { status: 'not_configured' | 'configured' | 'needs_update' | 'error'; detail: string; }
 export interface ToolHookItemInfo { id: string; label: string; status: string; detail: string; }
-export interface ToolHookToolInfo { id: string; name: string; items: ToolHookItemInfo[]; }
+export interface ToolHookToolText { fixed_text: string; fixed_voice_text: string; }
+export interface ToolHookToolInfo { id: string; name: string; default_fixed_text: string; default_fixed_voice_text: string; items: ToolHookItemInfo[]; }
 
 export interface TaskbarApp { title: string; process_name: string; pid: number; foreground: boolean; }
 
@@ -101,6 +106,7 @@ export interface McpServer {
   env: string;
   url: string;
   headers: string;
+  timeout_seconds: number;
   enabled: boolean;
   created_at: number;
   updated_at: number;
@@ -121,6 +127,8 @@ export interface McpServerRequest {
   env: string;
   url: string;
   headers: string;
+  /** 单次工具调用超时（秒） */
+  timeout_seconds: number;
   /** 非空时后端忽略其余字段，直接按 JSON 配置解析 */
   config_json?: string;
 }

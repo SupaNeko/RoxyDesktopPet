@@ -1,9 +1,19 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use tokio::sync::Mutex;
 
 pub struct DbState(pub Mutex<Connection>);
+
+/// 编程联动中单个工具的文本配置（固定提示文本 + 语音文本）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolHookToolText {
+    #[serde(default)]
+    pub fixed_text: String,
+    #[serde(default)]
+    pub fixed_voice_text: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -49,8 +59,8 @@ pub struct AppSettings {
     pub tool_hook_enabled: bool,
     pub tool_hook_mode: String,
     pub tool_hook_port: u32,
-    pub tool_hook_fixed_text: String,
-    pub tool_hook_fixed_voice_text: String,
+    /// 按工具独立存储的文本配置（JSON map 入库，key 为工具 id）。
+    pub tool_hook_tool_texts: HashMap<String, ToolHookToolText>,
     pub tool_hook_include_last_message: bool,
     pub tool_hook_min_interval_minutes: u32,
     pub tool_hook_daily_limit: u32,
@@ -62,6 +72,13 @@ pub struct AppSettings {
     pub voice_input_mode: String,
     pub push_to_talk_shortcut: String,
     pub pet_show_on_fullscreen: bool,
+    /// 联网搜索服务商："" 关闭 | "bocha" | "tavily"
+    pub search_provider: String,
+    pub search_api_key: String,
+    pub search_base_url: String,
+    pub search_api_configured: bool,
+    /// 后台代理最大工具调用轮数
+    pub agent_max_tool_rounds: u32,
 }
 
 impl Default for AppSettings {
@@ -109,8 +126,7 @@ impl Default for AppSettings {
             tool_hook_enabled: false,
             tool_hook_mode: "fixed".into(),
             tool_hook_port: 34125,
-            tool_hook_fixed_text: "你在 {tool} 里 {project} 的任务已经完成了。".into(),
-            tool_hook_fixed_voice_text: String::new(),
+            tool_hook_tool_texts: HashMap::new(),
             tool_hook_include_last_message: true,
             tool_hook_min_interval_minutes: 10,
             tool_hook_daily_limit: 20,
@@ -122,6 +138,11 @@ impl Default for AppSettings {
             voice_input_mode: "disabled".into(),
             push_to_talk_shortcut: String::new(),
             pet_show_on_fullscreen: true,
+            search_provider: String::new(),
+            search_api_key: String::new(),
+            search_base_url: String::new(),
+            search_api_configured: false,
+            agent_max_tool_rounds: 30,
         }
     }
 }
@@ -165,6 +186,8 @@ pub struct McpServer {
     pub url: String,
     /// 每行一条 KEY=VALUE（remote 请求头用）
     pub headers: String,
+    /// 单次工具调用超时（秒）
+    pub timeout_seconds: u32,
     pub enabled: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -179,6 +202,7 @@ pub struct McpServerInput {
     pub env: String,
     pub url: String,
     pub headers: String,
+    pub timeout_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,7 +256,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS memory_observer_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_message_rowid INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
          INSERT OR IGNORE INTO scheduler_state(id, proactive_count) VALUES(1, 0);
          INSERT OR IGNORE INTO memory_observer_state(id) VALUES(1);
-         CREATE TABLE IF NOT EXISTS mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL, command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL, command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '', timeout_seconds INTEGER NOT NULL DEFAULT 120, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, finished_at INTEGER);
          CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
          CREATE INDEX IF NOT EXISTS idx_occurrences_due ON reminder_occurrences(status, scheduled_at_utc);",
@@ -351,6 +375,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         ("tool_hook_token_enabled", "ALTER TABLE app_settings ADD COLUMN tool_hook_token_enabled INTEGER NOT NULL DEFAULT 1"),
         ("tool_hook_fixed_text", "ALTER TABLE app_settings ADD COLUMN tool_hook_fixed_text TEXT NOT NULL DEFAULT ''"),
         ("tool_hook_fixed_voice_text", "ALTER TABLE app_settings ADD COLUMN tool_hook_fixed_voice_text TEXT NOT NULL DEFAULT ''"),
+        ("tool_hook_tool_texts", "ALTER TABLE app_settings ADD COLUMN tool_hook_tool_texts TEXT NOT NULL DEFAULT ''"),
         ("tool_hook_include_last_message", "ALTER TABLE app_settings ADD COLUMN tool_hook_include_last_message INTEGER NOT NULL DEFAULT 1"),
         ("tool_hook_min_interval_minutes", "ALTER TABLE app_settings ADD COLUMN tool_hook_min_interval_minutes INTEGER NOT NULL DEFAULT 10"),
         ("tool_hook_daily_limit", "ALTER TABLE app_settings ADD COLUMN tool_hook_daily_limit INTEGER NOT NULL DEFAULT 20"),
@@ -362,6 +387,10 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         ("voice_input_mode", "ALTER TABLE app_settings ADD COLUMN voice_input_mode TEXT NOT NULL DEFAULT 'disabled'"),
         ("push_to_talk_shortcut", "ALTER TABLE app_settings ADD COLUMN push_to_talk_shortcut TEXT NOT NULL DEFAULT ''"),
         ("pet_show_on_fullscreen", "ALTER TABLE app_settings ADD COLUMN pet_show_on_fullscreen INTEGER NOT NULL DEFAULT 1"),
+        ("search_provider", "ALTER TABLE app_settings ADD COLUMN search_provider TEXT NOT NULL DEFAULT ''"),
+        ("search_api_key", "ALTER TABLE app_settings ADD COLUMN search_api_key TEXT NOT NULL DEFAULT ''"),
+        ("search_base_url", "ALTER TABLE app_settings ADD COLUMN search_base_url TEXT NOT NULL DEFAULT ''"),
+        ("agent_max_tool_rounds", "ALTER TABLE app_settings ADD COLUMN agent_max_tool_rounds INTEGER NOT NULL DEFAULT 30"),
     ] {
         if !columns.iter().any(|column| column == name) {
             conn.execute(sql, [])?;
@@ -378,29 +407,87 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             [],
         )?;
     }
-    // mcp_servers 的增量列迁移（老库补 headers 列）。
+    // mcp_servers 的增量列迁移（老库补 headers / timeout_seconds 列）。
     let mcp_columns: Vec<String> = conn
         .prepare("PRAGMA table_info(mcp_servers)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .filter_map(Result::ok)
         .collect();
-    if !mcp_columns.iter().any(|name| name == "headers") {
-        conn.execute(
+    for (name, sql) in [
+        (
+            "headers",
             "ALTER TABLE mcp_servers ADD COLUMN headers TEXT NOT NULL DEFAULT ''",
-            [],
-        )?;
+        ),
+        (
+            "timeout_seconds",
+            "ALTER TABLE mcp_servers ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 120",
+        ),
+    ] {
+        if !mcp_columns.iter().any(|column| column == name) {
+            conn.execute(sql, [])?;
+        }
     }
     let d = AppSettings::default();
     conn.execute(
         "INSERT OR IGNORE INTO app_settings(id, pet_name, persona, user_name, api_base_url, api_model, voice_output_enabled) VALUES(1, ?, ?, ?, ?, ?, ?)",
         params![d.pet_name, d.persona, d.user_name, d.api_base_url, d.api_model, d.voice_output_enabled as i32],
     )?;
+    seed_tool_hook_tool_texts(&conn)?;
     Ok(conn)
+}
+
+/// 一次性迁移：旧的全局固定文本拆分为各工具的独立配置。
+/// 仅当用户自定义过旧文本（非空且不等于旧默认模板）或填写过语音文本时才复制，
+/// 否则让各工具直接使用注册表中新的默认语句。
+fn seed_tool_hook_tool_texts(conn: &Connection) -> rusqlite::Result<()> {
+    let current: String = conn
+        .query_row("SELECT tool_hook_tool_texts FROM app_settings WHERE id=1", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or_default();
+    if !current.trim().is_empty() {
+        return Ok(());
+    }
+    let legacy_text: String = conn
+        .query_row("SELECT tool_hook_fixed_text FROM app_settings WHERE id=1", [], |r| r.get(0))
+        .unwrap_or_default();
+    let legacy_voice: String = conn
+        .query_row(
+            "SELECT tool_hook_fixed_voice_text FROM app_settings WHERE id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
+    const LEGACY_DEFAULT: &str = "你在 {tool} 里 {project} 的任务已经完成了。";
+    let customized = !legacy_text.trim().is_empty() && legacy_text.trim() != LEGACY_DEFAULT;
+    if !customized && legacy_voice.trim().is_empty() {
+        return Ok(());
+    }
+    let mut map = HashMap::new();
+    for tool in crate::tool_hook_config::TOOLS {
+        map.insert(
+            tool.id.to_string(),
+            ToolHookToolText {
+                fixed_text: if customized {
+                    legacy_text.trim().to_string()
+                } else {
+                    String::new()
+                },
+                fixed_voice_text: legacy_voice.trim().to_string(),
+            },
+        );
+    }
+    let json = serde_json::to_string(&map).unwrap_or_default();
+    conn.execute(
+        "UPDATE app_settings SET tool_hook_tool_texts=? WHERE id=1",
+        params![json],
+    )?;
+    Ok(())
 }
 
 pub fn get_settings(conn: &Connection, key_configured: bool) -> rusqlite::Result<AppSettings> {
     conn.query_row(
-        "SELECT pet_name, persona, user_name, api_base_url, api_model, voice_output_enabled, microphone_device_name, asr_app_id, asr_api_key, asr_api_secret, proactive_enabled, proactive_min_minutes, proactive_max_minutes, proactive_daily_limit, qdrant_url, embedding_base_url, embedding_model, embedding_api_key, embedding_dimension, memory_observer_enabled, memory_observer_interval, voice_output_mode, tts_api_protocol, tts_api_base_url, tts_api_model, tts_api_key, tts_api_voice, tts_api_language, vits_model_name, vits_model_path, vits_speaker_id, vits_target_language, vits_speed, vits_emotion_params, vits_translate_enabled, tool_hook_enabled, tool_hook_mode, tool_hook_port, tool_hook_fixed_text, tool_hook_fixed_voice_text, tool_hook_include_last_message, tool_hook_min_interval_minutes, tool_hook_daily_limit, tool_hook_debounce_seconds, tool_hook_voice_enabled, system_status_enabled, taskbar_apps_enabled, now_playing_enabled, voice_input_mode, push_to_talk_shortcut, pet_show_on_fullscreen FROM app_settings WHERE id=1",
+        "SELECT pet_name, persona, user_name, api_base_url, api_model, voice_output_enabled, microphone_device_name, asr_app_id, asr_api_key, asr_api_secret, proactive_enabled, proactive_min_minutes, proactive_max_minutes, proactive_daily_limit, qdrant_url, embedding_base_url, embedding_model, embedding_api_key, embedding_dimension, memory_observer_enabled, memory_observer_interval, voice_output_mode, tts_api_protocol, tts_api_base_url, tts_api_model, tts_api_key, tts_api_voice, tts_api_language, vits_model_name, vits_model_path, vits_speaker_id, vits_target_language, vits_speed, vits_emotion_params, vits_translate_enabled, tool_hook_enabled, tool_hook_mode, tool_hook_port, tool_hook_tool_texts, tool_hook_include_last_message, tool_hook_min_interval_minutes, tool_hook_daily_limit, tool_hook_debounce_seconds, tool_hook_voice_enabled, system_status_enabled, taskbar_apps_enabled, now_playing_enabled, voice_input_mode, push_to_talk_shortcut, pet_show_on_fullscreen, search_provider, search_api_key, search_base_url, agent_max_tool_rounds FROM app_settings WHERE id=1",
         [],
         |r| {
             let asr_app_id: String = r.get(7)?;
@@ -408,7 +495,9 @@ pub fn get_settings(conn: &Connection, key_configured: bool) -> rusqlite::Result
             let asr_api_secret: String = r.get(9)?;
             let embedding_api_key:String=r.get(17)?; let embedding_base_url:String=r.get(15)?; let embedding_model:String=r.get(16)?; let embedding_dimension:u32=r.get(18)?;
             let tts_api_key:String=r.get(25)?;
-            Ok(AppSettings { pet_name: r.get(0)?, persona: r.get(1)?, user_name: r.get(2)?, api_base_url: r.get(3)?, api_model: r.get(4)?, api_key_configured: key_configured, voice_output_enabled: r.get::<_, i32>(5)? != 0, microphone_device_name: r.get(6)?, asr_configured: !asr_app_id.is_empty() && !asr_api_key.is_empty() && !asr_api_secret.is_empty(), asr_app_id, asr_api_key, asr_api_secret, proactive_enabled: r.get::<_, i32>(10)? != 0, proactive_min_minutes: r.get(11)?, proactive_max_minutes: r.get(12)?, proactive_daily_limit: r.get(13)?, qdrant_url:r.get(14)?, memory_configured:!embedding_base_url.is_empty()&&!embedding_model.is_empty()&&!embedding_api_key.is_empty()&&embedding_dimension>0, embedding_base_url,embedding_model,embedding_api_key,embedding_dimension, memory_observer_enabled:r.get::<_,i32>(19)? != 0, memory_observer_interval:r.get(20)?, voice_output_mode:r.get(21)?, tts_api_protocol:r.get(22)?, tts_api_base_url:r.get(23)?, tts_api_model:r.get(24)?, tts_api_configured:!tts_api_key.is_empty(), tts_api_key, tts_api_voice:r.get(26)?, tts_api_language:r.get(27)?, vits_model_name:r.get(28)?, vits_model_path:r.get(29)?, vits_speaker_id:r.get(30)?, vits_target_language:r.get(31)?, vits_speed:r.get(32)?, vits_emotion_params:r.get(33)?, vits_translate_enabled:r.get::<_,i32>(34)? != 0, tool_hook_enabled:r.get::<_,i32>(35)? != 0, tool_hook_mode:r.get(36)?, tool_hook_port:r.get(37)?, tool_hook_fixed_text:r.get(38)?, tool_hook_fixed_voice_text:r.get(39)?, tool_hook_include_last_message:r.get::<_,i32>(40)? != 0, tool_hook_min_interval_minutes:r.get(41)?, tool_hook_daily_limit:r.get(42)?, tool_hook_debounce_seconds:r.get(43)?, tool_hook_voice_enabled:r.get::<_,i32>(44)? != 0, system_status_enabled:r.get::<_,i32>(45)? != 0, taskbar_apps_enabled:r.get::<_,i32>(46)? != 0, now_playing_enabled:r.get::<_,i32>(47)? != 0, voice_input_mode:r.get(48)?, push_to_talk_shortcut:r.get(49)?, pet_show_on_fullscreen:r.get::<_,i32>(50)? != 0 })
+            let tool_hook_tool_texts_raw:String=r.get(38)?;
+            let tool_hook_tool_texts=serde_json::from_str(&tool_hook_tool_texts_raw).unwrap_or_default();
+            Ok(AppSettings { pet_name: r.get(0)?, persona: r.get(1)?, user_name: r.get(2)?, api_base_url: r.get(3)?, api_model: r.get(4)?, api_key_configured: key_configured, voice_output_enabled: r.get::<_, i32>(5)? != 0, microphone_device_name: r.get(6)?, asr_configured: !asr_app_id.is_empty() && !asr_api_key.is_empty() && !asr_api_secret.is_empty(), asr_app_id, asr_api_key, asr_api_secret, proactive_enabled: r.get::<_, i32>(10)? != 0, proactive_min_minutes: r.get(11)?, proactive_max_minutes: r.get(12)?, proactive_daily_limit: r.get(13)?, qdrant_url:r.get(14)?, memory_configured:!embedding_base_url.is_empty()&&!embedding_model.is_empty()&&!embedding_api_key.is_empty()&&embedding_dimension>0, embedding_base_url,embedding_model,embedding_api_key,embedding_dimension, memory_observer_enabled:r.get::<_,i32>(19)? != 0, memory_observer_interval:r.get(20)?, voice_output_mode:r.get(21)?, tts_api_protocol:r.get(22)?, tts_api_base_url:r.get(23)?, tts_api_model:r.get(24)?, tts_api_configured:!tts_api_key.is_empty(), tts_api_key, tts_api_voice:r.get(26)?, tts_api_language:r.get(27)?, vits_model_name:r.get(28)?, vits_model_path:r.get(29)?, vits_speaker_id:r.get(30)?, vits_target_language:r.get(31)?, vits_speed:r.get(32)?, vits_emotion_params:r.get(33)?, vits_translate_enabled:r.get::<_,i32>(34)? != 0, tool_hook_enabled:r.get::<_,i32>(35)? != 0, tool_hook_mode:r.get(36)?, tool_hook_port:r.get(37)?, tool_hook_tool_texts, tool_hook_include_last_message:r.get::<_,i32>(39)? != 0, tool_hook_min_interval_minutes:r.get(40)?, tool_hook_daily_limit:r.get(41)?, tool_hook_debounce_seconds:r.get(42)?, tool_hook_voice_enabled:r.get::<_,i32>(43)? != 0, system_status_enabled:r.get::<_,i32>(44)? != 0, taskbar_apps_enabled:r.get::<_,i32>(45)? != 0, now_playing_enabled:r.get::<_,i32>(46)? != 0, voice_input_mode:r.get(47)?, push_to_talk_shortcut:r.get(48)?, pet_show_on_fullscreen:r.get::<_,i32>(49)? != 0, search_provider:r.get(50)?, search_api_key:r.get(51)?, search_base_url:r.get(52)?, search_api_configured:!r.get::<_,String>(51)?.is_empty(), agent_max_tool_rounds:r.get(53)? })
         }
     )
 }
@@ -429,8 +518,9 @@ pub fn toggle_proactive_enabled(conn: &Connection) -> rusqlite::Result<bool> {
 }
 
 pub fn save_settings(conn: &Connection, s: &AppSettings) -> rusqlite::Result<()> {
-    conn.execute("UPDATE app_settings SET pet_name=?, persona=?, user_name=?, api_base_url=?, api_model=?, voice_output_enabled=?, microphone_device_name=?, asr_app_id=?, asr_api_key=?, asr_api_secret=?, proactive_enabled=?, proactive_min_minutes=?, proactive_max_minutes=?, proactive_daily_limit=?, qdrant_url=?, embedding_base_url=?, embedding_model=?, embedding_api_key=?, embedding_dimension=?, memory_observer_enabled=?, memory_observer_interval=?, voice_output_mode=?, tts_api_protocol=?, tts_api_base_url=?, tts_api_model=?, tts_api_key=?, tts_api_voice=?, tts_api_language=?, vits_model_name=?, vits_model_path=?, vits_speaker_id=?, vits_target_language=?, vits_speed=?, vits_emotion_params=?, vits_translate_enabled=?, tool_hook_enabled=?, tool_hook_mode=?, tool_hook_port=?, tool_hook_fixed_text=?, tool_hook_fixed_voice_text=?, tool_hook_include_last_message=?, tool_hook_min_interval_minutes=?, tool_hook_daily_limit=?, tool_hook_debounce_seconds=?, tool_hook_voice_enabled=?, system_status_enabled=?, taskbar_apps_enabled=?, now_playing_enabled=?, voice_input_mode=?, push_to_talk_shortcut=?, pet_show_on_fullscreen=? WHERE id=1",
-        params![s.pet_name, s.persona, s.user_name, s.api_base_url, s.api_model, s.voice_output_enabled as i32, s.microphone_device_name, s.asr_app_id, s.asr_api_key, s.asr_api_secret, s.proactive_enabled as i32, s.proactive_min_minutes, s.proactive_max_minutes, s.proactive_daily_limit,s.qdrant_url,s.embedding_base_url,s.embedding_model,s.embedding_api_key,s.embedding_dimension,s.memory_observer_enabled as i32,s.memory_observer_interval,s.voice_output_mode,s.tts_api_protocol,s.tts_api_base_url,s.tts_api_model,s.tts_api_key,s.tts_api_voice,s.tts_api_language,s.vits_model_name,s.vits_model_path,s.vits_speaker_id,s.vits_target_language,s.vits_speed,s.vits_emotion_params,s.vits_translate_enabled as i32, s.tool_hook_enabled as i32, s.tool_hook_mode, s.tool_hook_port, s.tool_hook_fixed_text, s.tool_hook_fixed_voice_text, s.tool_hook_include_last_message as i32, s.tool_hook_min_interval_minutes, s.tool_hook_daily_limit, s.tool_hook_debounce_seconds, s.tool_hook_voice_enabled as i32, s.system_status_enabled as i32, s.taskbar_apps_enabled as i32, s.now_playing_enabled as i32, s.voice_input_mode, s.push_to_talk_shortcut, s.pet_show_on_fullscreen as i32])?;
+    let tool_hook_tool_texts = serde_json::to_string(&s.tool_hook_tool_texts).unwrap_or_default();
+    conn.execute("UPDATE app_settings SET pet_name=?, persona=?, user_name=?, api_base_url=?, api_model=?, voice_output_enabled=?, microphone_device_name=?, asr_app_id=?, asr_api_key=?, asr_api_secret=?, proactive_enabled=?, proactive_min_minutes=?, proactive_max_minutes=?, proactive_daily_limit=?, qdrant_url=?, embedding_base_url=?, embedding_model=?, embedding_api_key=?, embedding_dimension=?, memory_observer_enabled=?, memory_observer_interval=?, voice_output_mode=?, tts_api_protocol=?, tts_api_base_url=?, tts_api_model=?, tts_api_key=?, tts_api_voice=?, tts_api_language=?, vits_model_name=?, vits_model_path=?, vits_speaker_id=?, vits_target_language=?, vits_speed=?, vits_emotion_params=?, vits_translate_enabled=?, tool_hook_enabled=?, tool_hook_mode=?, tool_hook_port=?, tool_hook_tool_texts=?, tool_hook_include_last_message=?, tool_hook_min_interval_minutes=?, tool_hook_daily_limit=?, tool_hook_debounce_seconds=?, tool_hook_voice_enabled=?, system_status_enabled=?, taskbar_apps_enabled=?, now_playing_enabled=?, voice_input_mode=?, push_to_talk_shortcut=?, pet_show_on_fullscreen=?, search_provider=?, search_api_key=?, search_base_url=?, agent_max_tool_rounds=? WHERE id=1",
+        params![s.pet_name, s.persona, s.user_name, s.api_base_url, s.api_model, s.voice_output_enabled as i32, s.microphone_device_name, s.asr_app_id, s.asr_api_key, s.asr_api_secret, s.proactive_enabled as i32, s.proactive_min_minutes, s.proactive_max_minutes, s.proactive_daily_limit,s.qdrant_url,s.embedding_base_url,s.embedding_model,s.embedding_api_key,s.embedding_dimension,s.memory_observer_enabled as i32,s.memory_observer_interval,s.voice_output_mode,s.tts_api_protocol,s.tts_api_base_url,s.tts_api_model,s.tts_api_key,s.tts_api_voice,s.tts_api_language,s.vits_model_name,s.vits_model_path,s.vits_speaker_id,s.vits_target_language,s.vits_speed,s.vits_emotion_params,s.vits_translate_enabled as i32, s.tool_hook_enabled as i32, s.tool_hook_mode, s.tool_hook_port, tool_hook_tool_texts, s.tool_hook_include_last_message as i32, s.tool_hook_min_interval_minutes, s.tool_hook_daily_limit, s.tool_hook_debounce_seconds, s.tool_hook_voice_enabled as i32, s.system_status_enabled as i32, s.taskbar_apps_enabled as i32, s.now_playing_enabled as i32, s.voice_input_mode, s.push_to_talk_shortcut, s.pet_show_on_fullscreen as i32, s.search_provider, s.search_api_key, s.search_base_url, s.agent_max_tool_rounds])?;
     Ok(())
 }
 
@@ -693,11 +783,12 @@ fn row_to_mcp_server(r: &rusqlite::Row) -> rusqlite::Result<McpServer> {
         enabled: r.get::<_, i32>(8)? != 0,
         created_at: r.get(9)?,
         updated_at: r.get(10)?,
+        timeout_seconds: r.get(11)?,
     })
 }
 
 const MCP_SERVER_COLUMNS: &str =
-    "id,name,transport,command,args,env,url,headers,enabled,created_at,updated_at";
+    "id,name,transport,command,args,env,url,headers,enabled,created_at,updated_at,timeout_seconds";
 
 pub fn list_mcp_servers(conn: &Connection) -> rusqlite::Result<Vec<McpServer>> {
     let mut stmt = conn.prepare(&format!(
@@ -719,8 +810,8 @@ pub fn get_mcp_server(conn: &Connection, id: i64) -> rusqlite::Result<Option<Mcp
 pub fn insert_mcp_server(conn: &Connection, input: &McpServerInput) -> rusqlite::Result<McpServer> {
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
-        "INSERT INTO mcp_servers(name,transport,command,args,env,url,headers,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)",
-        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, now],
+        "INSERT INTO mcp_servers(name,transport,command,args,env,url,headers,enabled,created_at,updated_at,timeout_seconds) VALUES(?,?,?,?,?,?,?,1,?,?,?)",
+        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, now, input.timeout_seconds],
     )?;
     let id = conn.last_insert_rowid();
     get_mcp_server(conn, id)?.ok_or_else(|| {
@@ -731,8 +822,8 @@ pub fn insert_mcp_server(conn: &Connection, input: &McpServerInput) -> rusqlite:
 pub fn update_mcp_server(conn: &Connection, id: i64, input: &McpServerInput) -> rusqlite::Result<bool> {
     let now = chrono::Utc::now().timestamp_millis();
     let changed = conn.execute(
-        "UPDATE mcp_servers SET name=?,transport=?,command=?,args=?,env=?,url=?,headers=?,updated_at=? WHERE id=?",
-        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, id],
+        "UPDATE mcp_servers SET name=?,transport=?,command=?,args=?,env=?,url=?,headers=?,updated_at=?,timeout_seconds=? WHERE id=?",
+        params![input.name, input.transport, input.command, input.args, input.env, input.url, input.headers, now, input.timeout_seconds, id],
     )?;
     Ok(changed > 0)
 }
@@ -892,9 +983,11 @@ mod tests {
             env: String::new(),
             url: "http://127.0.0.1:9000/mcp".into(),
             headers: "X-Api-Key=abc".into(),
+            timeout_seconds: 45,
         };
         let server = insert_mcp_server(&conn, &input).unwrap();
         assert!(server.enabled);
+        assert_eq!(server.timeout_seconds, 45);
         assert_eq!(list_mcp_servers(&conn).unwrap().len(), 1);
         // 名称唯一约束
         assert!(insert_mcp_server(&conn, &input).is_err());

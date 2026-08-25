@@ -1,6 +1,7 @@
-use crate::db::{self, AppSettings, DbState, Message};
+use crate::db::{self, AppSettings, DbState, Message, ToolHookToolText};
 use crate::{AsrEnvConfig, ConversationState, MemoryEnvConfig, ModelConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -98,8 +99,8 @@ pub struct SaveSettingsRequest {
     pub tool_hook_enabled: bool,
     pub tool_hook_mode: String,
     pub tool_hook_port: u32,
-    pub tool_hook_fixed_text: String,
-    pub tool_hook_fixed_voice_text: String,
+    #[serde(default)]
+    pub tool_hook_tool_texts: HashMap<String, ToolHookToolText>,
     pub tool_hook_include_last_message: bool,
     pub tool_hook_min_interval_minutes: u32,
     pub tool_hook_daily_limit: u32,
@@ -111,6 +112,18 @@ pub struct SaveSettingsRequest {
     pub voice_input_mode: String,
     pub push_to_talk_shortcut: String,
     pub pet_show_on_fullscreen: bool,
+    #[serde(default)]
+    pub search_provider: String,
+    #[serde(default)]
+    pub search_api_key: String,
+    #[serde(default)]
+    pub search_base_url: String,
+    #[serde(default = "default_agent_max_tool_rounds")]
+    pub agent_max_tool_rounds: u32,
+}
+
+fn default_agent_max_tool_rounds() -> u32 {
+    30
 }
 
 #[derive(Serialize)]
@@ -172,6 +185,26 @@ fn apply_tts_defaults(settings: &mut AppSettings) {
     }
 }
 
+/// 清理按工具的固定文本配置：trim 文本、丢弃未知工具与两项皆空的条目。
+fn sanitize_tool_hook_tool_texts(
+    input: HashMap<String, ToolHookToolText>,
+) -> HashMap<String, ToolHookToolText> {
+    input
+        .into_iter()
+        .filter(|(tool, _)| crate::tool_hook_config::find_tool(tool).is_some())
+        .map(|(tool, text)| {
+            (
+                tool,
+                ToolHookToolText {
+                    fixed_text: text.fixed_text.trim().to_string(),
+                    fixed_voice_text: text.fixed_voice_text.trim().to_string(),
+                },
+            )
+        })
+        .filter(|(_, text)| !text.fixed_text.is_empty() || !text.fixed_voice_text.is_empty())
+        .collect()
+}
+
 pub(crate) fn memory_config(settings: &AppSettings) -> crate::memory::MemoryConfig {
     crate::memory::MemoryConfig {
         embedding_base_url: settings.embedding_base_url.clone(),
@@ -207,6 +240,8 @@ pub async fn get_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
+    settings.search_api_configured = !settings.search_api_key.is_empty();
+    settings.search_api_key.clear();
     Ok(settings)
 }
 
@@ -261,6 +296,11 @@ pub async fn save_settings(
         }
     } else {
         request.tts_api_key.trim().into()
+    };
+    let search_api_key = if request.search_api_key.trim().is_empty() {
+        existing.search_api_key
+    } else {
+        request.search_api_key.trim().into()
     };
     let mut settings = AppSettings {
         pet_name: ROXY_NAME.into(),
@@ -326,8 +366,7 @@ pub async fn save_settings(
             "fixed".into()
         },
         tool_hook_port: request.tool_hook_port.clamp(1, 65535),
-        tool_hook_fixed_text: request.tool_hook_fixed_text.trim().to_string(),
-        tool_hook_fixed_voice_text: request.tool_hook_fixed_voice_text.trim().to_string(),
+        tool_hook_tool_texts: sanitize_tool_hook_tool_texts(request.tool_hook_tool_texts),
         tool_hook_include_last_message: request.tool_hook_include_last_message,
         tool_hook_min_interval_minutes: request.tool_hook_min_interval_minutes.clamp(0, 10_080),
         tool_hook_daily_limit: request.tool_hook_daily_limit.clamp(0, 100),
@@ -342,6 +381,19 @@ pub async fn save_settings(
         },
         push_to_talk_shortcut: request.push_to_talk_shortcut,
         pet_show_on_fullscreen: request.pet_show_on_fullscreen,
+        search_provider: match request.search_provider.trim().to_ascii_lowercase().as_str() {
+            "bocha" => "bocha".into(),
+            "tavily" => "tavily".into(),
+            _ => String::new(),
+        },
+        search_api_key,
+        search_base_url: request
+            .search_base_url
+            .trim()
+            .trim_end_matches('/')
+            .to_string(),
+        search_api_configured: false,
+        agent_max_tool_rounds: request.agent_max_tool_rounds.clamp(1, 100),
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());
@@ -376,6 +428,8 @@ pub async fn save_settings(
     settings.embedding_api_key.clear();
     settings.tts_api_configured = !settings.tts_api_key.is_empty();
     settings.tts_api_key.clear();
+    settings.search_api_configured = !settings.search_api_key.is_empty();
+    settings.search_api_key.clear();
     Ok(settings)
 }
 
@@ -655,16 +709,28 @@ async fn request_bilingual_reply(
 
     Err(format!("模型回复失败，已重试 3 次：{last_error}"))
 }
-/// 主聊天系统提示词的 MCP 段落：可用工具清单、两种调用方式说明、近期代理任务。
-fn build_mcp_context(tools: &[crate::mcp::McpToolEntry], runs: &[db::AgentRun]) -> String {
+/// 主聊天系统提示词的能力段落：可用工具清单、两种调用方式说明、联网状态、近期代理任务。
+fn build_mcp_context(
+    tools: &[crate::mcp::McpToolEntry],
+    runs: &[db::AgentRun],
+    search_available: bool,
+) -> String {
     let mut out = String::new();
-    if !tools.is_empty() {
-        let list = tools
-            .iter()
-            .map(|t| format!("- {}（来自服务「{}」）", t.description, t.server_name))
-            .collect::<Vec<_>>()
-            .join("\n");
-        out.push_str(&format!("\n【可用工具与任务委派】\n当前接入了以下 MCP 工具：\n{list}\n使用方式：\n1. 简单、可立即完成、不需要向用户汇报结果的动作（例如「帮我播放音乐」）：你只管自然回应即可，后台链路会自动调用合适的工具完成，不要在回复里声称你亲自执行了什么，也不要填写 follow_up_task。\n2. 复杂、需要查询或执行并把结果反馈给用户的任务（例如「今天天气怎么样」）：在正常回复用户的同时，把要执行的任务填到 reply_to_user 的 follow_up_task 字段委派给后台代理；代理完成后你会收到结果，再转告用户。委派时的回复要先告知用户你正在处理（例如「我查一下，稍后告诉你」）。\n没有把握用到上述工具的任务不要委派。"));
+    if !tools.is_empty() || search_available {
+        let mut caps: Vec<String> = Vec::new();
+        if search_available {
+            caps.push("- web_search：联网搜索（内置能力，由后台代理使用，可查天气、新闻、资料等时效性信息）".into());
+        }
+        caps.extend(
+            tools
+                .iter()
+                .map(|t| format!("- {}（来自服务「{}」）", t.description, t.server_name)),
+        );
+        let list = caps.join("\n");
+        out.push_str(&format!("\n【可用工具与任务委派】\n当前接入了以下能力：\n{list}\n使用方式：\n1. 简单、可立即完成、不需要向用户汇报结果的动作（例如「帮我播放音乐」）：你只管自然回应即可，后台链路会自动调用合适的工具完成，不要在回复里声称你亲自执行了什么，也不要填写 follow_up_task。\n2. 复杂、需要查询或执行并把结果反馈给用户的任务（例如「今天天气怎么样」「最近有什么新闻」）：在正常回复用户的同时，把要执行的任务填到 reply_to_user 的 follow_up_task 字段委派给后台代理；代理完成后你会收到结果，再转告用户。委派时的回复要先告知用户你正在处理（例如「我查一下，稍后告诉你」）。\n没有把握用到上述能力的任务不要委派。"));
+    }
+    if !search_available {
+        out.push_str("\n【联网能力】当前未配置联网搜索。天气、新闻、汇率、股价等时效性信息你没有可靠来源：无法确定时要明确告诉用户你不知道、答不上来，不要凭印象编造答案。");
     }
     if !runs.is_empty() {
         let items = runs
@@ -774,11 +840,12 @@ async fn process_message(
     // MCP 能力注入：可用工具清单 + 两种调用方式说明 + 近期代理任务结论。
     let mcp_state = app.state::<crate::mcp::McpState>();
     let mcp_tools = crate::mcp::available_tools(mcp_state.inner()).await;
+    let search_available = crate::search::SearchConfig::from_settings(&settings).is_some();
     let agent_runs = {
         let conn = db_state.0.lock().await;
         db::list_recent_agent_runs(&conn, 3).unwrap_or_default()
     };
-    let mcp_context = build_mcp_context(&mcp_tools, &agent_runs);
+    let mcp_context = build_mcp_context(&mcp_tools, &agent_runs, search_available);
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
         "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
         ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, system_context, mcp_context
@@ -811,8 +878,8 @@ async fn process_message(
         .map(str::trim)
         .filter(|t| !t.is_empty())
     {
-        if mcp_tools.is_empty() {
-            log_warn!("模型委派的代理任务被忽略（无可用 MCP 工具）：{task}");
+        if mcp_tools.is_empty() && !search_available {
+            log_warn!("模型委派的代理任务被忽略（无可用 MCP 工具或联网搜索）：{task}");
         } else {
             let run = {
                 let conn = db_state.0.lock().await;
@@ -1359,9 +1426,16 @@ pub struct McpServerRequest {
     pub url: String,
     #[serde(default)]
     pub headers: String,
+    /// 单次工具调用超时（秒），默认 120。
+    #[serde(default = "default_mcp_timeout_seconds")]
+    pub timeout_seconds: u32,
     /// 非空时忽略其余字段，直接按 JSON 配置解析（支持标准 mcpServers 包装）。
     #[serde(default)]
     pub config_json: String,
+}
+
+fn default_mcp_timeout_seconds() -> u32 {
+    120
 }
 
 /// JSON 对象 → 每行一条 KEY=VALUE（值非字符串时取 JSON 表示）。
@@ -1402,6 +1476,12 @@ pub(crate) fn parse_mcp_config_json(raw: &str) -> Result<db::McpServerInput, Str
         .map(String::from)
         .or(name_from_key)
         .unwrap_or_default();
+    let timeout_seconds = obj
+        .get("timeout")
+        .or_else(|| obj.get("timeout_seconds"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or_else(default_mcp_timeout_seconds);
     if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
         return Ok(db::McpServerInput {
             name,
@@ -1411,6 +1491,7 @@ pub(crate) fn parse_mcp_config_json(raw: &str) -> Result<db::McpServerInput, Str
             env: String::new(),
             url: url.trim().into(),
             headers: json_object_to_lines(obj.get("headers")),
+            timeout_seconds,
         });
     }
     if let Some(command) = obj.get("command").and_then(|v| v.as_str()) {
@@ -1428,6 +1509,7 @@ pub(crate) fn parse_mcp_config_json(raw: &str) -> Result<db::McpServerInput, Str
             env: json_object_to_lines(obj.get("env")),
             url: String::new(),
             headers: String::new(),
+            timeout_seconds,
         });
     }
     Err("JSON 中需要 url（远程）或 command（本地命令）字段".into())
@@ -1443,6 +1525,7 @@ fn validate_mcp_request(request: &McpServerRequest) -> Result<db::McpServerInput
             env: request.env.trim().into(),
             url: request.url.trim().into(),
             headers: request.headers.trim().into(),
+            timeout_seconds: request.timeout_seconds,
         }
     } else {
         parse_mcp_config_json(&request.config_json)?
@@ -1467,6 +1550,9 @@ fn validate_mcp_request(request: &McpServerRequest) -> Result<db::McpServerInput
                 return Err(format!("{field}格式错误：每行应为 KEY=VALUE（「{line}」）"));
             }
         }
+    }
+    if !(1..=3600).contains(&input.timeout_seconds) {
+        return Err("工具调用超时需在 1~3600 秒之间".into());
     }
     Ok(input)
 }
@@ -1629,6 +1715,7 @@ mod tests {
             env: String::new(),
             url: String::new(),
             headers: String::new(),
+            timeout_seconds: 120,
             config_json: r#"{"url":"https://a.com/mcp"}"#.into(),
         })
         .is_err());

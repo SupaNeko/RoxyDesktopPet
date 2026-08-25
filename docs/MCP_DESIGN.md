@@ -48,7 +48,10 @@ schema 原样透传。主聊天保持「一次必答」契约（强制 `reply_to
    - 主聊天正常先回复（如「我查一下，稍后告诉你」），同时在 `reply_to_user` 的
      `follow_up_task` 字段填写委派任务；
    - `process_message` 落一条 `agent_runs`（status=running）并 `agent::schedule`；
-   - 代理（`src-tauri/src/agent.rs`）带全部可用 MCP 工具跑 ≤8 轮工具循环，产出中文结论；
+   - 代理（`src-tauri/src/agent.rs`）带全部可用 MCP 工具跑工具循环，产出中文结论。
+     最大轮数由设置项 `agent_max_tool_rounds` 控制（默认 30，设置页「后台代理」可改）；
+     轮数耗尽后追加一条「不带工具」请求强制模型基于已获得的信息给出结论；
+     每次工具调用的结果截断 200 字记入日志便于排错；
    - 结论落库（status=done）后，以 `agent_followup` 触发 `generate_scheduled_message`，
      把「任务 + 结果」注入上下文，由主聊天转告用户（气泡 + 语音链路复用）；
    - 近 3 条 `agent_runs` 摘要持续注入主聊天系统提示词，作为后续对话上下文。
@@ -56,16 +59,30 @@ schema 原样透传。主聊天保持「一次必答」契约（强制 `reply_to
 主聊天系统提示词在有可用 MCP 工具时动态追加「可用工具与任务委派」段落，
 明确上述两种方式的用法与边界（没有把握用到工具时不要委派）。
 
+### 内置联网搜索（web_search）
+
+除 MCP 工具外，subagent 还有一个内置 `web_search` 工具（`src-tauri/src/search.rs`）：
+
+- **配置**：设置页「联网搜索」选择服务商（博查 / Tavily）并填 API Key，可选自定义接口地址；
+  存于 `app_settings` 的 `search_provider` / `search_api_key` / `search_base_url` 三列。
+- **Provider 抽象**：新增服务商只需在 `SearchProvider` 加变体并实现其请求/解析，
+  后续链路统一走 `web_search()`（配置层以外无差异）；结果统一截断到 3000 字。
+- **仅 subagent 可用**：`web_search` 只注入 agent.rs 的工具循环，不进入主聊天和审计链路。
+  配置后「可用工具与任务委派」段落会列出 web_search，主聊天据此委派联网任务；
+  未配置时系统提示词追加「联网能力」段落，要求模型对时效性信息明确表明不知道、不编造。
+- 委派门槛：`follow_up_task` 在「无 MCP 工具且未配置搜索」时被忽略并记日志。
+
 ## 4. 数据表
 
 ```sql
 mcp_servers(id, name UNIQUE, transport('stdio'|'remote'),
-            command, args, env, url, headers, enabled, created_at, updated_at)
+            command, args, env, url, headers, timeout_seconds, enabled, created_at, updated_at)
 agent_runs(id, task, status('running'|'done'|'error'), summary, created_at, finished_at)
 ```
 
 - `args`：空格分隔，或 JSON 数组（保留含空格参数）；`env` / `headers`：每行一条 `KEY=VALUE`（本地存储，与 ASR Key 同等处理）。
 - `headers`：远程 MCP 的自定义请求头（如 `X-Caiyun-API-Key=…`），随每次请求发送。
+- `timeout_seconds`：单次工具调用超时（1~3600 秒，默认 120），随配置更新即时生效；JSON 导入可用 `timeout` 字段指定。
 - 名称唯一，重名报错「已存在同名 MCP 服务器」。
 
 ### JSON 导入
