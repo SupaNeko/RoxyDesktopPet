@@ -64,6 +64,7 @@ export async function scanVitsModels(): Promise<VitsModelInfo[]> { return inTaur
 export async function testVoiceOutput(): Promise<void> { if (inTauri()) await invoke('test_voice_output'); }
 export async function startGptSovits(): Promise<void> { if (inTauri()) await invoke('start_gpt_sovits'); }
 export async function listTodos(): Promise<Todo[]> { return inTauri() ? invoke('list_todos') : []; }
+export async function deleteTodo(id: string): Promise<boolean> { return inTauri() ? invoke('delete_todo', { id }) : true; }
 export async function openAppWindow(label: 'settings' | 'todos'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
 export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
 export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }

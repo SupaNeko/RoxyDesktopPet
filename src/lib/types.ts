@@ -80,7 +80,7 @@ export interface VoiceStatus { state: 'disabled' | 'listening' | 'speaking' | 'r
 
 export interface VitsModelInfo { name: string; path: string; language: string | null; speakers: string[]; has_config: boolean; }
 
-export interface Todo { id: string; title: string; due_at_utc: number; timezone: string; status: string; created_at: number; }
+export interface Todo { id: string; title: string; due_at_utc: number; timezone: string; status: string; repeat_interval_minutes: number | null; created_at: number; }
 
 export interface ToolHookStatus { status: 'not_configured' | 'configured' | 'needs_update' | 'error'; detail: string; }
 export interface ToolHookItemInfo { id: string; label: string; status: string; detail: string; }

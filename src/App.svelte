@@ -3,8 +3,8 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
-  import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying } from './lib/api';
+  import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Send, Settings, Trash2, X } from 'lucide-svelte';
+  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying } from './lib/api';
   import type { AppSettings, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
@@ -148,6 +148,11 @@
   async function enablePassthroughFromMenu() { await changeMousePassthrough(true); await closeMenu(); }
   async function openWindow(label: 'settings'|'todos') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
   const formatDue = (timestamp: number) => new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(timestamp));
+  const formatRepeat = (minutes: number) => minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
+  async function removeTodo(id: string) {
+    error = '';
+    try { await deleteTodo(id); todos = todos.filter((todo) => todo.id !== id); } catch (e) { error = String(e); }
+  }
   let systemPreview = $state('');
   let systemPreviewBusy = $state(false);
   async function previewSystemPerception() {
@@ -346,7 +351,7 @@
     <header><span>CHATPET</span><h1>待办提醒</h1><small>{todos.length} 项未完成</small></header>
     {#if error}<p class="error">{error}</p>{/if}
     {#if todos.length === 0}<div class="todo-empty"><ListTodo size={30}/><strong>目前没有待办</strong><span>对桌宠说“提醒我……”即可创建。</span></div>{:else}
-      <div class="todo-list">{#each todos as todo}<article class:overdue={todo.due_at_utc < Date.now()}><i></i><div><strong>{todo.title}</strong><span>{formatDue(todo.due_at_utc)} · {todo.timezone}</span></div></article>{/each}</div>
+      <div class="todo-list">{#each todos as todo (todo.id)}<article class:overdue={todo.due_at_utc < Date.now()}><i></i><div><strong>{todo.title}</strong><span>{formatDue(todo.due_at_utc)} · {todo.timezone}{#if todo.repeat_interval_minutes} · <em class="repeat-badge">{formatRepeat(todo.repeat_interval_minutes)}</em>{/if}</span></div><button class="todo-delete" aria-label="删除待办" title="删除" onclick={() => removeTodo(todo.id)}><Trash2 size={14}/></button></article>{/each}</div>
     {/if}
   </main>
 {:else}
@@ -406,6 +411,11 @@
   .todo-empty { min-height:310px; display:grid; place-content:center; justify-items:center; gap:7px; color:#81766b; text-align:center; }
   .todo-empty strong { color:#554a41; }
   .todo-empty span { font-size:12px; }
+  .todo-list article { align-items:center; }
+  .todo-list article div { flex:1; min-width:0; }
+  .todo-delete { flex:0 0 auto; display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:7px; color:#9a8c7d; background:transparent; cursor:pointer; }
+  .todo-delete:hover { color:#b0493f; background:#f3e4de; }
+  .repeat-badge { color:#8d563f; font-style:normal; }
   .range-value { justify-self: end; margin-top: -20px; color: #9b6047; font-variant-numeric: tabular-nums; }
   .settings-page input.size-slider { padding: 0; accent-color: #9b6047; cursor: pointer; }
   .pet-window { position: relative; pointer-events: none; }

@@ -506,6 +506,7 @@ pub fn run() {
             commands::list_microphone_devices,
             commands::list_memories,
             commands::list_todos,
+            commands::delete_todo,
             commands::open_app_window,
             commands::show_pet_menu,
             commands::toggle_proactive_enabled,

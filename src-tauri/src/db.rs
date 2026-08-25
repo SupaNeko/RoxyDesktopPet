@@ -144,6 +144,8 @@ pub struct Todo {
     pub due_at_utc: i64,
     pub timezone: String,
     pub status: String,
+    #[serde(default)]
+    pub repeat_interval_minutes: Option<i64>,
     pub created_at: i64,
 }
 
@@ -319,6 +321,17 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             conn.execute(sql, [])?;
         }
     }
+    let todo_columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(todos)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .collect();
+    if !todo_columns.iter().any(|name| name == "repeat_interval_minutes") {
+        conn.execute(
+            "ALTER TABLE todos ADD COLUMN repeat_interval_minutes INTEGER",
+            [],
+        )?;
+    }
     let d = AppSettings::default();
     conn.execute(
         "INSERT OR IGNORE INTO app_settings(id, pet_name, persona, user_name, api_base_url, api_model, voice_output_enabled) VALUES(1, ?, ?, ?, ?, ?, ?)",
@@ -432,6 +445,7 @@ pub fn create_todo(
     due_at_utc: i64,
     timezone: &str,
     source_message_id: Option<&str>,
+    repeat_interval_minutes: Option<i64>,
 ) -> rusqlite::Result<Todo> {
     let now = chrono::Utc::now().timestamp_millis();
     let todo = Todo {
@@ -440,18 +454,36 @@ pub fn create_todo(
         due_at_utc,
         timezone: timezone.to_string(),
         status: "pending".into(),
+        repeat_interval_minutes,
         created_at: now,
     };
     let occurrence_id = uuid::Uuid::new_v4().to_string();
     let tx = conn.transaction()?;
-    tx.execute("INSERT INTO todos(id,title,due_at_utc,timezone,status,source_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", params![todo.id, todo.title, todo.due_at_utc, todo.timezone, todo.status, source_message_id, now, now])?;
+    tx.execute("INSERT INTO todos(id,title,due_at_utc,timezone,status,source_message_id,created_at,updated_at,repeat_interval_minutes) VALUES(?,?,?,?,?,?,?,?,?)", params![todo.id, todo.title, todo.due_at_utc, todo.timezone, todo.status, source_message_id, now, now, todo.repeat_interval_minutes])?;
     tx.execute("INSERT INTO reminder_occurrences(id,todo_id,scheduled_at_utc,status) VALUES(?,?,?,'pending')", params![occurrence_id, todo.id, due_at_utc])?;
     tx.commit()?;
     Ok(todo)
 }
 
+/// 删除待办：标记为 deleted，并清掉未交付的提醒 occurrence。
+pub fn delete_todo(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let changed = conn.execute(
+        "UPDATE todos SET status='deleted',updated_at=? WHERE id=? AND status='pending'",
+        params![now, id],
+    )?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        "DELETE FROM reminder_occurrences WHERE todo_id=? AND status IN ('pending','claimed')",
+        params![id],
+    )?;
+    Ok(true)
+}
+
 pub fn list_pending_todos(conn: &Connection) -> rusqlite::Result<Vec<Todo>> {
-    let mut stmt = conn.prepare("SELECT id,title,due_at_utc,timezone,status,created_at FROM todos WHERE status='pending' ORDER BY due_at_utc LIMIT 100")?;
+    let mut stmt = conn.prepare("SELECT id,title,due_at_utc,timezone,status,repeat_interval_minutes,created_at FROM todos WHERE status='pending' ORDER BY due_at_utc LIMIT 100")?;
     let rows = stmt
         .query_map([], |r| {
             Ok(Todo {
@@ -460,7 +492,8 @@ pub fn list_pending_todos(conn: &Connection) -> rusqlite::Result<Vec<Todo>> {
                 due_at_utc: r.get(2)?,
                 timezone: r.get(3)?,
                 status: r.get(4)?,
-                created_at: r.get(5)?,
+                repeat_interval_minutes: r.get(5)?,
+                created_at: r.get(6)?,
             })
         })?
         .collect();
@@ -487,10 +520,32 @@ pub fn deliver_reminder(
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute("UPDATE reminder_occurrences SET status='delivered',delivered_at=?,lease_until=NULL,last_error=? WHERE id=?", params![now,error,item.occurrence_id])?;
-    conn.execute(
-        "UPDATE todos SET status='completed',updated_at=? WHERE id=?",
-        params![now, item.todo_id],
+    let repeat: Option<i64> = conn.query_row(
+        "SELECT repeat_interval_minutes FROM todos WHERE id=?",
+        params![item.todo_id],
+        |r| r.get(0),
     )?;
+    if let Some(interval_minutes) = repeat.filter(|v| *v > 0) {
+        // 循环待办：从原计划时间起按间隔推进到下一个未来时间点，避免漂移。
+        let interval_ms = interval_minutes * 60_000;
+        let mut next_due = item.scheduled_at_utc + interval_ms;
+        while next_due <= now {
+            next_due += interval_ms;
+        }
+        conn.execute(
+            "UPDATE todos SET due_at_utc=?,updated_at=? WHERE id=?",
+            params![next_due, now, item.todo_id],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO reminder_occurrences(id,todo_id,scheduled_at_utc,status) VALUES(?,?,?,'pending')",
+            params![uuid::Uuid::new_v4().to_string(), item.todo_id, next_due],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE todos SET status='completed',updated_at=? WHERE id=?",
+            params![now, item.todo_id],
+        )?;
+    }
     Ok(())
 }
 
@@ -593,7 +648,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open(&dir.path().join("test.db")).unwrap();
         let due = chrono::Utc::now().timestamp_millis() - 1;
-        let todo = create_todo(&mut conn, "喝水", due, "Asia/Shanghai", None).unwrap();
+        let todo = create_todo(&mut conn, "喝水", due, "Asia/Shanghai", None, None).unwrap();
         assert_eq!(list_pending_todos(&conn).unwrap().len(), 1);
         let claimed = claim_due_reminder(&mut conn, chrono::Utc::now().timestamp_millis())
             .unwrap()
@@ -604,6 +659,48 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recurring_todo_reschedules_after_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open(&dir.path().join("test.db")).unwrap();
+        let due = chrono::Utc::now().timestamp_millis() - 1;
+        let _todo =
+            create_todo(&mut conn, "站起来活动", due, "Asia/Shanghai", None, Some(30)).unwrap();
+        let claimed = claim_due_reminder(&mut conn, chrono::Utc::now().timestamp_millis())
+            .unwrap()
+            .unwrap();
+        deliver_reminder(&conn, &claimed, None).unwrap();
+        // 循环待办保持 pending，且排好了下一次未来时间的 occurrence。
+        let todos = list_pending_todos(&conn).unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].repeat_interval_minutes, Some(30));
+        assert!(todos[0].due_at_utc > chrono::Utc::now().timestamp_millis());
+        assert_eq!(todos[0].due_at_utc - due, 30 * 60_000);
+        // 下一次还未到点，不能被 claim。
+        assert!(
+            claim_due_reminder(&mut conn, chrono::Utc::now().timestamp_millis())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn delete_todo_blocks_future_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open(&dir.path().join("test.db")).unwrap();
+        let due = chrono::Utc::now().timestamp_millis() - 1;
+        let todo = create_todo(&mut conn, "喝水", due, "Asia/Shanghai", None, Some(30)).unwrap();
+        assert!(delete_todo(&conn, &todo.id).unwrap());
+        assert!(list_pending_todos(&conn).unwrap().is_empty());
+        assert!(
+            claim_due_reminder(&mut conn, chrono::Utc::now().timestamp_millis())
+                .unwrap()
+                .is_none()
+        );
+        // 重复删除返回 false。
+        assert!(!delete_todo(&conn, &todo.id).unwrap());
     }
 
     #[test]

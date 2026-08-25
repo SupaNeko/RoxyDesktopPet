@@ -783,11 +783,12 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
     };
     apply_memory_env(&mut settings, memory_env.inner());
     let tools = vec![
-        serde_json::json!({"type":"function","function":{"name":"create_todo","description":"创建一个到点提醒用户的待办事项","parameters":{"type":"object","properties":{"title":{"type":"string"},"due_at":{"type":"string","description":"含时区的 RFC3339 时间"},"timezone":{"type":"string"}},"required":["title","due_at"],"additionalProperties":false}}}),
-        serde_json::json!({"type":"function","function":{"name":"list_todos","description":"查看尚未完成的提醒事项","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
+        serde_json::json!({"type":"function","function":{"name":"create_todo","description":"创建一个到点提醒用户的待办事项；用户要求「每隔多久重复提醒」时填 repeat_every_minutes 创建循环待办","parameters":{"type":"object","properties":{"title":{"type":"string"},"due_at":{"type":"string","description":"首次提醒时间，含时区的 RFC3339 时间"},"timezone":{"type":"string"},"repeat_every_minutes":{"type":"number","description":"循环间隔（分钟），仅当用户明确要求重复提醒时填写"}},"required":["title","due_at"],"additionalProperties":false}}}),
+        serde_json::json!({"type":"function","function":{"name":"list_todos","description":"查看尚未完成的提醒事项（含循环待办及其 id）","parameters":{"type":"object","properties":{},"additionalProperties":false}}}),
+        serde_json::json!({"type":"function","function":{"name":"delete_todo","description":"删除一个待办（包括循环待办）。必须先用 list_todos 拿到待办 id","parameters":{"type":"object","properties":{"todo_id":{"type":"string","description":"list_todos 返回的待办 id"}},"required":["todo_id"],"additionalProperties":false}}}),
     ];
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",local_time_description())}),
+        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」；用户要求「每隔 N 分钟/小时/天提醒我……」这类循环提醒时，额外填 repeat_every_minutes（换算成分钟）。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n只有用户明确要求删除、取消某个待办或循环提醒时才调用 delete_todo，且必须先调用 list_todos 确认要删的待办 id；用户描述模糊、匹配不到唯一待办时不要删。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。",local_time_description())}),
     ];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
@@ -845,6 +846,11 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                     if due <= chrono::Utc::now().timestamp_millis() {
                         return Err("提醒时间必须晚于当前时间".into());
                     }
+                    let repeat = args
+                        .get("repeat_every_minutes")
+                        .and_then(|v| v.as_f64())
+                        .filter(|v| *v >= 1.0 && *v <= 525_600.0)
+                        .map(|v| v.round() as i64);
                     let mut conn = db_state.0.lock().await;
                     serde_json::to_string(
                         &db::create_todo(
@@ -855,6 +861,7 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("Asia/Shanghai"),
                             Some(source_message_id),
+                            repeat,
                         )
                         .map_err(|e| e.to_string())?,
                     )
@@ -866,6 +873,19 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                         &db::list_pending_todos(&conn).map_err(|e| e.to_string())?,
                     )
                     .map_err(|e| e.to_string())?
+                }
+                "delete_todo" => {
+                    let todo_id = args
+                        .get("todo_id")
+                        .and_then(|v| v.as_str())
+                        .ok_or("删除待办缺少 todo_id")?;
+                    let conn = db_state.0.lock().await;
+                    let deleted = db::delete_todo(&conn, todo_id).map_err(|e| e.to_string())?;
+                    if deleted {
+                        "已删除".to_string()
+                    } else {
+                        "未找到该待办（可能已删除或已完成）".to_string()
+                    }
                 }
                 _ => return Err(format!("不允许的工具：{name}")),
             };
@@ -1092,6 +1112,12 @@ pub async fn list_memories(
 pub async fn list_todos(db_state: State<'_, DbState>) -> Result<Vec<db::Todo>, String> {
     let conn = db_state.0.lock().await;
     db::list_pending_todos(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_todo(db_state: State<'_, DbState>, id: String) -> Result<bool, String> {
+    let conn = db_state.0.lock().await;
+    db::delete_todo(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
