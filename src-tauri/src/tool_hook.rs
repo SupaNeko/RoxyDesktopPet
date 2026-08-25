@@ -130,7 +130,7 @@ async fn handle_event(app: &AppHandle, tool: &str, body: &str) -> Result<(), Str
     if !settings.tool_hook_enabled {
         return Ok(());
     }
-    if !matches!(tool, "opencode" | "codex" | "kimi") {
+    if crate::tool_hook_config::find_tool(tool).is_none() {
         return Ok(());
     }
 
@@ -233,11 +233,24 @@ fn fixed_message(settings: &AppSettings, event: &HookEvent) -> Message {
             .replace("{event}", &event.event)
             .replace("{time}", &time)
     };
-    let content = render(&settings.tool_hook_fixed_text);
-    let japanese_text = if settings.tool_hook_fixed_voice_text.trim().is_empty() {
+    // 按工具取文本配置；留空时回退到该工具的默认语句。
+    let defaults = crate::tool_hook_config::find_tool(&event.tool);
+    let configured = settings.tool_hook_tool_texts.get(&event.tool);
+    let fixed_text = configured
+        .map(|t| t.fixed_text.trim())
+        .filter(|t| !t.is_empty())
+        .or_else(|| defaults.map(|d| d.default_fixed_text))
+        .unwrap_or_default();
+    let voice_text = configured
+        .map(|t| t.fixed_voice_text.trim())
+        .filter(|t| !t.is_empty())
+        .or_else(|| defaults.map(|d| d.default_fixed_voice_text))
+        .unwrap_or_default();
+    let content = render(fixed_text);
+    let japanese_text = if voice_text.is_empty() {
         None
     } else {
-        Some(render(&settings.tool_hook_fixed_voice_text))
+        Some(render(voice_text))
     };
     Message {
         id: uuid::Uuid::new_v4().to_string(),

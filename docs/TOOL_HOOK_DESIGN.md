@@ -153,9 +153,10 @@ Content-Type: application/json
 
 ### 7.1 固定提示（不调用 AI）
 
-- 固定中文文本，支持占位符：`{tool}`、`{project}`、`{event}`、`{time}`。
-  例：`你在 {tool} 里 {project} 的任务已经完成了。`
-- 独立"语音文本（日文）"字段：GPT-SoVITS 需要 `japanese_text`，固定模式下不调用翻译，由用户预写日语文本（可留空）。语音关闭/非 GPT-SoVITS 模式下仅用中文文本。
+- 提示文本**按工具独立配置**：每个工具各有一份中文固定文本与日文语音文本（存于 `app_settings.tool_hook_tool_texts`，JSON map，key 为工具 id）；用户留空时回退到该工具在注册表（`ToolSpec`）中的默认语句（如 `OpenCode 已完成。` / `OpenCode のタスクが完了しました。`）。
+- 支持占位符：`{tool}`、`{project}`、`{event}`、`{time}`。
+- 日文语音文本：GPT-SoVITS 需要 `japanese_text`，固定模式下不调用翻译，默认语句已预填，用户可按工具覆盖。语音关闭/非 GPT-SoVITS 模式下仅用中文文本。
+- 旧的全局共享字段 `tool_hook_fixed_text` / `tool_hook_fixed_voice_text` 已废弃：库中列保留但代码不再读写；升级时若用户自定义过旧文本，一次性迁移复制给所有已接入工具。
 - 消息 emotion 固定 `calm`。
 
 ### 7.2 消息提示（调用 AI）
@@ -224,17 +225,24 @@ enum ToolHookItemStatus {
 
 ### 8.3 适配层接口（Rust）
 
+实现采用静态注册表（`tool_hook_config.rs`）：
+
 ```rust
-trait ToolHookAdapter {
-    fn id() -> &'static str;
-    fn items() -> Vec<ItemSpec>;                       // 工具支持哪些配置项
-    fn detect(item: ToolHookItem, ctx: &Settings) -> ToolHookItemStatus;
-    fn write(item: ToolHookItem, ctx: &Settings) -> Result<ToolHookItemStatus, String>;
-    fn remove(item: ToolHookItem, ctx: &Settings) -> Result<ToolHookItemStatus, String>;
+pub struct ToolSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub default_fixed_text: &'static str,        // 固定提示默认中文语句
+    pub default_fixed_voice_text: &'static str,  // 固定提示默认日文语音语句
+    pub detect: fn(&AppSettings) -> ToolHookStatus,
+    pub write: fn(&AppSettings) -> Result<ToolHookStatus, String>,
+    pub remove: fn() -> Result<ToolHookStatus, String>,
 }
+
+pub const TOOLS: &[ToolSpec] = &[ /* opencode / codex / kimi … */ ];
+pub fn find_tool(id: &str) -> Option<&'static ToolSpec>;
 ```
 
-每个工具一个适配函数组（不一定要 trait，第一版可用 match 分发）。新增工具 = 新增一个适配模块 + 事件归一化映射，接收端与管线零改动。
+`list_supported` / `write` / `remove` 与接收端的工具白名单全部经 `TOOLS` / `find_tool` 查表分发。新增工具 = 实现 detect/write/remove 三个函数 + 注册表加一行 + 事件归一化映射，接收端与管线零改动。
 
 ### 8.4 opencode 适配器（第一版）
 
@@ -350,8 +358,9 @@ export const ChatPetHook = async ({ project, directory }) => {
 | `tool_hook_port` | INTEGER | 34125 | 监听端口 |
 | `tool_hook_token` | TEXT | '' | 随机 Token，前端不回显 |
 | `tool_hook_token_enabled` | INTEGER | 1 | 简单校验开关 |
-| `tool_hook_fixed_text` | TEXT | 默认模板 | 固定提示中文 |
-| `tool_hook_fixed_voice_text` | TEXT | '' | 固定提示日文语音文本 |
+| `tool_hook_fixed_text` | TEXT | '' | （已废弃）旧的全局固定提示中文，仅作迁移来源 |
+| `tool_hook_fixed_voice_text` | TEXT | '' | （已废弃）旧的全局日文语音文本，仅作迁移来源 |
+| `tool_hook_tool_texts` | TEXT | '' | 按工具的文本配置，JSON map：`{"<tool_id>": {"fixed_text", "fixed_voice_text"}}` |
 | `tool_hook_include_last_message` | INTEGER | 1 | AI 模式信息来源开关 |
 | `tool_hook_min_interval_minutes` | INTEGER | 10 | 提醒间隔 |
 | `tool_hook_daily_limit` | INTEGER | 20 | 每日上限 |

@@ -50,27 +50,69 @@ pub struct ToolHookItemInfo {
 pub struct ToolHookToolInfo {
     pub id: String,
     pub name: String,
+    /// 该工具固定提示的默认中文文本（用户未配置时使用）。
+    pub default_fixed_text: String,
+    /// 该工具固定提示的默认日文语音文本（用户未配置时使用）。
+    pub default_fixed_voice_text: String,
     pub items: Vec<ToolHookItemInfo>,
 }
 
+/// 一个编程工具的接入定义。新增工具 = 实现 detect/write/remove 三个函数，
+/// 然后在 TOOLS 注册表中加一行，接收端与管线零改动。
+pub struct ToolSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub default_fixed_text: &'static str,
+    pub default_fixed_voice_text: &'static str,
+    pub detect: fn(&AppSettings) -> ToolHookStatus,
+    pub write: fn(&AppSettings) -> Result<ToolHookStatus, String>,
+    pub remove: fn() -> Result<ToolHookStatus, String>,
+}
+
+pub const TOOLS: &[ToolSpec] = &[
+    ToolSpec {
+        id: "opencode",
+        name: "OpenCode",
+        default_fixed_text: "OpenCode 已完成。",
+        default_fixed_voice_text: "OpenCode のタスクが完了しました。",
+        detect: opencode_detect,
+        write: opencode_write,
+        remove: opencode_remove,
+    },
+    ToolSpec {
+        id: "codex",
+        name: "Codex",
+        default_fixed_text: "Codex 已完成。",
+        default_fixed_voice_text: "Codex のタスクが完了しました。",
+        detect: codex_detect,
+        write: codex_write,
+        remove: codex_remove,
+    },
+    ToolSpec {
+        id: "kimi",
+        name: "Kimi",
+        default_fixed_text: "Kimi 已完成。",
+        default_fixed_voice_text: "Kimi のタスクが完了しました。",
+        detect: kimi_detect,
+        write: kimi_write,
+        remove: kimi_remove,
+    },
+];
+
+pub fn find_tool(id: &str) -> Option<&'static ToolSpec> {
+    TOOLS.iter().find(|tool| tool.id == id)
+}
+
 pub fn list_supported(settings: &AppSettings) -> Vec<ToolHookToolInfo> {
-    vec![
-        ToolHookToolInfo {
-            id: "opencode".into(),
-            name: "OpenCode".into(),
-            items: vec![item_info("task_done", "任务完成提示", opencode_detect(settings))],
-        },
-        ToolHookToolInfo {
-            id: "codex".into(),
-            name: "Codex".into(),
-            items: vec![item_info("task_done", "任务完成提示", codex_detect(settings))],
-        },
-        ToolHookToolInfo {
-            id: "kimi".into(),
-            name: "Kimi".into(),
-            items: vec![item_info("task_done", "任务完成提示", kimi_detect(settings))],
-        },
-    ]
+    TOOLS.iter()
+        .map(|tool| ToolHookToolInfo {
+            id: tool.id.into(),
+            name: tool.name.into(),
+            default_fixed_text: tool.default_fixed_text.into(),
+            default_fixed_voice_text: tool.default_fixed_voice_text.into(),
+            items: vec![item_info("task_done", "任务完成提示", (tool.detect)(settings))],
+        })
+        .collect()
 }
 
 fn item_info(id: &str, label: &str, status: ToolHookStatus) -> ToolHookItemInfo {
@@ -81,11 +123,9 @@ pub fn write(tool: &str, item: &str, settings: &AppSettings) -> Result<ToolHookS
     if item != "task_done" {
         return Err("不支持的配置项".into());
     }
-    match tool {
-        "opencode" => opencode_write(settings),
-        "codex" => codex_write(settings),
-        "kimi" => kimi_write(settings),
-        _ => Err("不支持的软件".into()),
+    match find_tool(tool) {
+        Some(spec) => (spec.write)(settings),
+        None => Err("不支持的软件".into()),
     }
 }
 
@@ -93,11 +133,9 @@ pub fn remove(tool: &str, item: &str, _settings: &AppSettings) -> Result<ToolHoo
     if item != "task_done" {
         return Err("不支持的配置项".into());
     }
-    match tool {
-        "opencode" => opencode_remove(),
-        "codex" => codex_remove(),
-        "kimi" => kimi_remove(),
-        _ => Err("不支持的软件".into()),
+    match find_tool(tool) {
+        Some(spec) => (spec.remove)(),
+        None => Err("不支持的软件".into()),
     }
 }
 
