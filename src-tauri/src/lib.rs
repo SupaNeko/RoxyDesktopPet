@@ -279,6 +279,74 @@ pub fn run() {
             global_input::ensure_hooks();
             scheduler::start(app.handle().clone());
 
+            // 恢复上次的语音输入方式（持续监听 / 按住说话快捷键）。
+            {
+                let voice_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let settings = {
+                        let db_state = voice_app.state::<db::DbState>();
+                        let conn = db_state.0.lock().await;
+                        match db::get_settings(&conn, true) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                log_error!("恢复语音输入设置失败: {e}");
+                                return;
+                            }
+                        }
+                    };
+                    match settings.voice_input_mode.as_str() {
+                        "continuous" => {
+                            let asr_env = voice_app.state::<AsrEnvConfig>();
+                            let pick = |stored: String, env: &String| {
+                                if stored.is_empty() {
+                                    env.clone()
+                                } else {
+                                    stored
+                                }
+                            };
+                            let credentials = crate::asr::XfyunCredentials {
+                                app_id: pick(settings.asr_app_id, &asr_env.app_id),
+                                api_key: pick(settings.asr_api_key, &asr_env.api_key),
+                                api_secret: pick(settings.asr_api_secret, &asr_env.api_secret),
+                            };
+                            if !credentials.is_complete() {
+                                log_warn!("持续语音输入未恢复：讯飞 ASR 凭据不完整");
+                                return;
+                            }
+                            let voice = voice_app.state::<audio::VoiceState>();
+                            if let Err(error) = audio::start(
+                                voice_app.clone(),
+                                voice.inner(),
+                                settings.microphone_device_name.as_deref(),
+                                credentials,
+                            )
+                            .await
+                            {
+                                log_error!("启动时恢复持续语音监听失败: {error}");
+                            } else {
+                                log_info!("已恢复持续语音监听");
+                            }
+                        }
+                        "push_to_talk" => {
+                            if let Ok(binding) = serde_json::from_str::<
+                                crate::global_input::CapturedBinding,
+                            >(&settings.push_to_talk_shortcut)
+                            {
+                                let input = voice_app.state::<global_input::GlobalInputState>();
+                                if let Err(error) =
+                                    global_input::set_binding(input.inner(), binding.tokens)
+                                {
+                                    log_error!("恢复按住说话快捷键失败: {error}");
+                                } else {
+                                    log_info!("已恢复按住说话快捷键");
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
             let hook_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tool_hook::reconcile_server(&hook_app).await;

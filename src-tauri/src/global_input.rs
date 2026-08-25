@@ -29,7 +29,7 @@ struct InputInner {
 #[derive(Default)]
 pub struct GlobalInputState(StdMutex<InputInner>);
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 pub struct CapturedBinding {
     pub tokens: Vec<String>,
     pub label: String,

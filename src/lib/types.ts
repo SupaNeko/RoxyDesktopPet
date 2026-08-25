@@ -51,6 +51,8 @@ export interface AppSettings {
   system_status_enabled: boolean;
   taskbar_apps_enabled: boolean;
   now_playing_enabled: boolean;
+  voice_input_mode: 'disabled' | 'continuous' | 'push_to_talk';
+  push_to_talk_shortcut: string;
 }
 
 export interface Message {

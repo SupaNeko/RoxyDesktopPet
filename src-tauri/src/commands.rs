@@ -108,6 +108,8 @@ pub struct SaveSettingsRequest {
     pub system_status_enabled: bool,
     pub taskbar_apps_enabled: bool,
     pub now_playing_enabled: bool,
+    pub voice_input_mode: String,
+    pub push_to_talk_shortcut: String,
 }
 
 #[derive(Serialize)]
@@ -333,6 +335,11 @@ pub async fn save_settings(
         system_status_enabled: request.system_status_enabled,
         taskbar_apps_enabled: request.taskbar_apps_enabled,
         now_playing_enabled: request.now_playing_enabled,
+        voice_input_mode: match request.voice_input_mode.as_str() {
+            "continuous" | "push_to_talk" => request.voice_input_mode.clone(),
+            _ => "disabled".into(),
+        },
+        push_to_talk_shortcut: request.push_to_talk_shortcut,
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());

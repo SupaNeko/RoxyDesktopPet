@@ -159,7 +159,9 @@ pub async fn start(
             .find(|device| device.name().ok().as_deref() == Some(selected))
             .ok_or_else(|| format!("已选择的麦克风不存在或已断开：{selected}"))?
     } else {
-        return Err("尚未选择麦克风，请先在设置中选择输入设备".into());
+        // 未手动选择时跟随系统默认输入设备。
+        host.default_input_device()
+            .ok_or_else(|| "找不到可用的麦克风（系统默认输入设备缺失）".to_string())?
     };
     let device_name = device.name().unwrap_or_else(|_| "默认麦克风".into());
     let config = device
@@ -404,14 +406,17 @@ pub async fn start_push_to_talk(
     selected_device_name: Option<&str>,
 ) -> Result<(), String> {
     let host = cpal::default_host();
-    let selected = selected_device_name
-        .filter(|name| !name.trim().is_empty())
-        .ok_or("尚未选择麦克风，请先在设置中选择输入设备")?;
-    let device = host
-        .input_devices()
-        .map_err(|e| format!("无法枚举麦克风：{e}"))?
-        .find(|device| device.name().ok().as_deref() == Some(selected))
-        .ok_or_else(|| format!("已选择的麦克风不存在或已断开：{selected}"))?;
+    let selected = selected_device_name.filter(|name| !name.trim().is_empty());
+    let device = if let Some(selected) = selected {
+        host.input_devices()
+            .map_err(|e| format!("无法枚举麦克风：{e}"))?
+            .find(|device| device.name().ok().as_deref() == Some(selected))
+            .ok_or_else(|| format!("已选择的麦克风不存在或已断开：{selected}"))?
+    } else {
+        // 未手动选择时跟随系统默认输入设备。
+        host.default_input_device()
+            .ok_or_else(|| "找不到可用的麦克风（系统默认输入设备缺失）".to_string())?
+    };
     let config = device
         .default_input_config()
         .map_err(|e| format!("无法读取麦克风配置：{e}"))?;
