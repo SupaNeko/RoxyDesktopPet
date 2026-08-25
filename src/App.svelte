@@ -68,6 +68,12 @@
     bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
     schedulePetHitTestLayout();
   }
+  function hideBubble() {
+    if (bubbleTimer !== null) { window.clearTimeout(bubbleTimer); bubbleTimer = null; }
+    bubbleVisible = false;
+    petEmotion = 'calm';
+    schedulePetHitTestLayout();
+  }
   function openComposer() { if (!mousePassthrough) { composerVisible = true; requestAnimationFrame(() => { document.querySelector<HTMLInputElement>('.pet-composer input')?.focus(); schedulePetHitTestLayout(); }); } }
   async function changeMousePassthrough(enabled: boolean) { await setMousePassthrough(enabled); mousePassthrough = enabled; }
   function updatePetImageSize(value: number) { petImageSize = Math.min(150, Math.max(60, value)); localStorage.setItem('petImageSize', String(petImageSize)); emit('pet-image-size-preview', petImageSize).catch(() => {}); schedulePetHitTestLayout(); }
@@ -204,7 +210,7 @@
       <label>如何称呼你<input bind:value={settings.user_name} /></label>
       <label>角色图片大小 <span class="range-value">{petImageSize}%</span><input class="size-slider" type="range" min="60" max="150" step="1" value={petImageSize} oninput={(event) => updatePetImageSize(Number(event.currentTarget.value))} /></label>
       <label>对话气泡显示时间（秒）<input type="number" min="1" max="600" bind:value={bubbleDisplaySeconds} /></label>
-      <p class="note">回复显示超过该时间后自动隐藏，默认 30 秒。</p>
+      <p class="note">回复显示超过该时间后自动隐藏，默认 30 秒。气泡右上角也可以手动关闭。</p>
       <button class="option" class:on={settings.pet_show_on_fullscreen} onclick={() => settings.pet_show_on_fullscreen = !settings.pet_show_on_fullscreen}>
         <span><strong>在全屏应用上显示桌宠</strong><small>{settings.pet_show_on_fullscreen ? '全屏游戏 / 视频时桌宠仍保持显示' : '桌宠所在屏幕出现全屏应用时自动隐藏，退出全屏后恢复'}</small></span>
       </button>
@@ -360,7 +366,7 @@
 {:else}
   <main class="pet-window" data-tauri-drag-region>
     {#if bubbleVisible || busy || error}
-      <div class="speech-bubble" ><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p></div>
+      <div class="speech-bubble" ><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p><button class="bubble-close" aria-label="关闭气泡" onclick={hideBubble}><X size={13} /></button></div>
     {/if}
     <button class="pet" class:hovered={petHovered} style={`width:${172 * petDisplayScale}px;height:${198 * petDisplayScale}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
@@ -419,13 +425,15 @@
   .todo-delete { flex:0 0 auto; display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:7px; color:#9a8c7d; background:transparent; cursor:pointer; }
   .todo-delete:hover { color:#b0493f; background:#f3e4de; }
   .repeat-badge { color:#8d563f; font-style:normal; }
+  .bubble-close { position:absolute; top:6px; right:8px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; color:#9a8c7d; background:transparent; cursor:pointer; }
+  .bubble-close:hover { color:#5e4a3c; background:#f0e6da; }
   .range-value { justify-self: end; margin-top: -20px; color: #9b6047; font-variant-numeric: tabular-nums; }
   .settings-page input.size-slider { padding: 0; accent-color: #9b6047; cursor: pointer; }
   .pet-window { position: relative; pointer-events: none; }
   .pet { width: 172px; height: 198px; flex-shrink: 0; pointer-events: auto; }
   .speech-bubble { position: relative; flex-shrink: 0; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
   .speech-bubble::after { content: ''; position: absolute; left: 61%; bottom: -13px; width: 22px; height: 22px; border-right: 1px solid rgba(190,177,163,.85); border-bottom: 1px solid rgba(190,177,163,.85); background: #fff; transform: skew(-20deg) rotate(45deg); }
-  .speech-bubble p { position: relative; z-index: 1; margin: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+  .speech-bubble p { position: relative; z-index: 1; margin: 0; padding-right: 16px; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
   .pet-composer { position: absolute; z-index: 12; left: 22px; right: 22px; bottom: 76px; display: grid; grid-template-columns: minmax(0,1fr) 34px 34px; gap: 6px; padding: 8px; border: 1px solid #d8cab9; border-radius: 13px; background: rgba(255,250,242,.97); box-shadow: 0 12px 28px rgba(55,40,28,.2); pointer-events: auto; }
   .pet-composer input { min-width: 0; border: 1px solid #ddd0c0; border-radius: 8px; padding: 8px 10px; outline: none; background: #fff; }
   .pet-composer button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; color: #fff; background: #9b6047; }
