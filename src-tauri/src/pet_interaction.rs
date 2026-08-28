@@ -47,8 +47,10 @@ pub fn show_context_menu(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let todos = MenuItem::with_id(app, "pet_todos", "查看待办", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let menu =
-        Menu::with_items(app, &[&passthrough, &settings, &todos]).map_err(|e| e.to_string())?;
+    let history = MenuItem::with_id(app, "pet_history", "历史会话", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(app, &[&passthrough, &settings, &todos, &history])
+        .map_err(|e| e.to_string())?;
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 #[tauri::command]

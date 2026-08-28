@@ -185,7 +185,7 @@ pub async fn start(
     let worker_app = app.clone();
     let processing = Arc::new(AtomicBool::new(false));
     thread::Builder::new()
-        .name("chatpet-vad".into())
+        .name("roxydesktoppet-vad".into())
         .spawn(move || {
             let mut vad = match VoiceActivityDetector::builder()
                 .sample_rate(TARGET_RATE as i64)

@@ -71,7 +71,7 @@ pub async fn reconcile_server(app: &AppHandle) {
     }
 
     // 自动自愈：外部工具里的 hook 脚本端口过期（needs_update）时，用当前设置重写。
-    // 脚本是 ChatPet 写入的（带 marker），重写安全；脚本路径不变，无需重启对应工具。
+    // 脚本是 RoxyDesktopPet 写入的（带 marker），重写安全；脚本路径不变，无需重启对应工具。
     for tool in crate::tool_hook_config::list_supported(&settings) {
         for item in tool.items {
             if item.status != "needs_update" {

@@ -133,6 +133,15 @@ pub fn fail_event(conn: &Connection, event_id: &str, error: &str) -> rusqlite::R
     Ok(())
 }
 
+/// 观察者多轮交互结束后，把合并的各轮原始输出（提取/决策/总结的账本 JSON）写入事件。
+pub fn finalize_event(conn: &Connection, event_id: &str, raw_result: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE memory_events SET observer_result=?,status='applied',processed_at=? WHERE id=?",
+        params![raw_result, chrono::Utc::now().timestamp_millis(), event_id],
+    )?;
+    Ok(())
+}
+
 fn revision(
     tx: &Transaction<'_>,
     memory_id: &str,

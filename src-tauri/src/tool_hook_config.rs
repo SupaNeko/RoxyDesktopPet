@@ -4,15 +4,15 @@ use serde::Serialize;
 
 use crate::db::AppSettings;
 
-const OPENCODE_PLUGIN_FILE: &str = "chatpet-task-done.js";
-const OPENCODE_MARKER: &str = "// chatpet-hook";
-const CODEX_SCRIPT_FILE: &str = "chatpet-stop.ps1";
-const CODEX_SCRIPT_MARKER: &str = "# chatpet-hook";
+const OPENCODE_PLUGIN_FILE: &str = "roxydesktoppet-task-done.js";
+const OPENCODE_MARKER: &str = "// roxydesktoppet-hook";
+const CODEX_SCRIPT_FILE: &str = "roxydesktoppet-stop.ps1";
+const CODEX_SCRIPT_MARKER: &str = "# roxydesktoppet-hook";
 const CODEX_HOOKS_JSON: &str = "hooks.json";
-const KIMI_SCRIPT_FILE: &str = "chatpet-stop.ps1";
-const KIMI_SCRIPT_MARKER: &str = "# chatpet-hook";
-const KIMI_HOOK_BEGIN: &str = "# >>> chatpet hook >>>";
-const KIMI_HOOK_END: &str = "# <<< chatpet hook <<<";
+const KIMI_SCRIPT_FILE: &str = "roxydesktoppet-stop.ps1";
+const KIMI_SCRIPT_MARKER: &str = "# roxydesktoppet-hook";
+const KIMI_HOOK_BEGIN: &str = "# >>> roxydesktoppet hook >>>";
+const KIMI_HOOK_END: &str = "# <<< roxydesktoppet hook <<<";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolHookStatus {
@@ -165,7 +165,7 @@ fn backup_existing(path: &Path) -> Result<Option<PathBuf>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let backup = PathBuf::from(format!("{}.chatpet.bak-{}", path.display(), timestamp()));
+    let backup = PathBuf::from(format!("{}.roxydesktoppet.bak-{}", path.display(), timestamp()));
     std::fs::copy(path, &backup).map_err(|e| format!("备份失败：{e}"))?;
     Ok(Some(backup))
 }
@@ -173,7 +173,7 @@ fn backup_existing(path: &Path) -> Result<Option<PathBuf>, String> {
 fn latest_backup(path: &Path) -> Option<PathBuf> {
     let parent = path.parent()?;
     let name = path.file_name()?.to_string_lossy().to_string();
-    let prefix = format!("{name}.chatpet.bak-");
+    let prefix = format!("{name}.roxydesktoppet.bak-");
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(parent)
         .ok()?
         .filter_map(Result::ok)
@@ -203,8 +203,8 @@ fn opencode_plugin_file() -> PathBuf {
 
 fn opencode_plugin_content(port: u32) -> String {
     format!(
-        r#"// chatpet-hook — written by ChatPet
-export const ChatPetHook = async ({{ project, directory }}) => {{
+        r#"// roxydesktoppet-hook — written by RoxyDesktopPet
+export const RoxyDesktopPetHook = async ({{ project, directory }}) => {{
   return {{
     event: async ({{ event }}) => {{
       const {{ type, properties }} = event;
@@ -252,7 +252,7 @@ fn opencode_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("插件文件存在但不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || content.contains("x-chatpet-token")
+        || content.contains("x-roxydesktoppet-token")
     {
         return ToolHookStatus::needs_update();
     }
@@ -307,7 +307,7 @@ fn codex_hooks_json() -> PathBuf {
 
 fn codex_script_content(port: u32) -> String {
     format!(
-        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"codex\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/codex\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
+        "# roxydesktoppet-hook — written by RoxyDesktopPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"codex\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/codex\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
     )
 }
 
@@ -387,7 +387,7 @@ fn codex_remove_hooks() -> Result<(), String> {
             emptied = true;
         }
     }
-    let sentinel = PathBuf::from(format!("{}.chatpet-original-missing", hooks_path.display()));
+    let sentinel = PathBuf::from(format!("{}.roxydesktoppet-original-missing", hooks_path.display()));
     if emptied && root.as_object().is_some_and(|o| o.is_empty()) && sentinel.exists() {
         std::fs::remove_file(&hooks_path).map_err(|e| format!("删除 hooks.json 失败：{e}"))?;
         let _ = std::fs::remove_file(&sentinel);
@@ -421,7 +421,7 @@ fn codex_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("通知脚本不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || content.contains("x-chatpet-token")
+        || content.contains("x-roxydesktoppet-token")
     {
         return ToolHookStatus::needs_update();
     }
@@ -444,7 +444,7 @@ fn codex_write(settings: &AppSettings) -> Result<ToolHookStatus, String> {
 
     let hooks_path = codex_hooks_json();
     if !hooks_path.exists() {
-        let sentinel = PathBuf::from(format!("{}.chatpet-original-missing", hooks_path.display()));
+        let sentinel = PathBuf::from(format!("{}.roxydesktoppet-original-missing", hooks_path.display()));
         std::fs::write(&sentinel, "").map_err(|e| format!("写入标记失败：{e}"))?;
     } else {
         backup_existing(&hooks_path)?;
@@ -486,7 +486,7 @@ fn kimi_config_toml() -> PathBuf {
 
 fn kimi_script_content(port: u32) -> String {
     format!(
-        "# chatpet-hook — written by ChatPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"kimi\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/kimi\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
+        "# roxydesktoppet-hook — written by RoxyDesktopPet\ntry {{\n  $raw = [Console]::In.ReadToEnd()\n  $ev = $raw | ConvertFrom-Json\n  $project = \"\"\n  if ($ev.cwd) {{ $project = Split-Path $ev.cwd -Leaf }}\n  $body = @{{\n    tool = \"kimi\"\n    event = \"turn_done\"\n    session_id = $ev.session_id\n    project = $project\n    cwd = $ev.cwd\n    timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()\n  }} | ConvertTo-Json -Compress\n  Invoke-WebRequest -Uri \"http://127.0.0.1:{port}/hook/kimi\" -Method POST -ContentType \"application/json\" -Body $body -UseBasicParsing | Out-Null\n}} catch {{\n  exit 0\n}}\nexit 0\n"
     )
 }
 
@@ -586,7 +586,7 @@ fn kimi_detect(settings: &AppSettings) -> ToolHookStatus {
         return ToolHookStatus::error("通知脚本不是桌宠写入（文件已被其它程序占用）");
     }
     if !content.contains(&format!("http://127.0.0.1:{}", settings.tool_hook_port))
-        || content.contains("x-chatpet-token")
+        || content.contains("x-roxydesktoppet-token")
     {
         return ToolHookStatus::needs_update();
     }

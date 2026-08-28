@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RoxyDesktopPet",
-  "version": "0.1.0",
-  "identifier": "com.chatpet.desktop",
+  "version": "0.1.2",
+  "identifier": "com.roxydesktoppet.desktop",
   "mainBinaryName": "RoxyDesktopPet",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "pet",
-        "title": "ChatPet",
+        "title": "RoxyDesktopPet",
         "width": 320,
         "height": 230,
         "resizable": false,
@@ -32,7 +32,7 @@
         "title": "Roxy Menu",
         "url": "index.html?view=pet-menu",
         "width": 200,
-        "height": 230,
+        "height": 300,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -43,7 +43,7 @@
       },
       {
         "label": "settings",
-        "title": "ChatPet 设置",
+        "title": "RoxyDesktopPet 设置",
         "width": 520,
         "height": 680,
         "resizable": true,
@@ -51,9 +51,17 @@
       },
       {
         "label": "todos",
-        "title": "ChatPet 待办",
+        "title": "RoxyDesktopPet 待办",
         "width": 440,
         "height": 520,
+        "resizable": true,
+        "visible": false
+      },
+      {
+        "label": "history",
+        "title": "RoxyDesktopPet 历史会话",
+        "width": 520,
+        "height": 680,
         "resizable": true,
         "visible": false
       }

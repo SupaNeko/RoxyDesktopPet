@@ -47,7 +47,7 @@
 
 ```text
 ┌─ 编程工具侧 ────────────────────────────┐
-│ opencode 插件 (chatpet-task-done.js)     │
+│ opencode 插件 (roxydesktoppet-task-done.js)     │
 │   └─ 订阅 session.status(idle) / session.error
 │        └─ POST http://127.0.0.1:PORT/hook/opencode
 │ Claude Code hooks (后续)                 │
@@ -216,9 +216,9 @@ enum ToolHookItemStatus {
 
 1. **优先选"目录即配置"通道（零侵入）**。opencode 插件只要把 JS 文件放进 `~/.config/opencode/plugins/` 就自动加载，**完全不改 opencode.json**，删除就是删文件、无副作用。
 2. **必须改 JSON 时**：读-合并-写回 + 幂等 upsert，只操作自己的专用键；写入后重新解析自校验，失败回滚。
-3. **必须改 TOML 时**：marker 注释块（`# BEGIN chatpet …` / `# END chatpet`），删除即整块移除。
-4. **写前三件套备份**：首次写入 `.chatpet-original` 永久快照（原文件不存在则写 `.chatpet-original-missing` 哨兵）；每次写入 `.chatpet-backup-<ISO时间戳>`。
-5. **归属标记**：写入的插件文件/配置块带 `// chatpet-hook` / marker 注释，标识"这是我们写的"。
+3. **必须改 TOML 时**：marker 注释块（`# BEGIN roxydesktoppet …` / `# END roxydesktoppet`），删除即整块移除。
+4. **写前三件套备份**：首次写入 `.roxydesktoppet-original` 永久快照（原文件不存在则写 `.roxydesktoppet-original-missing` 哨兵）；每次写入 `.roxydesktoppet-backup-<ISO时间戳>`。
+5. **归属标记**：写入的插件文件/配置块带 `// roxydesktoppet-hook` / marker 注释，标识"这是我们写的"。
 6. **删除恢复规则**：确认当前内容仍是我们写的才恢复；用户改过则拒绝覆盖并提示。
 7. **原子写**：同目录临时文件 + rename。
 8. **幂等**：重复执行安装不产生重复条目；删除不存在的条目是 no-op。
@@ -246,29 +246,29 @@ pub fn find_tool(id: &str) -> Option<&'static ToolSpec>;
 
 ### 8.4 opencode 适配器（第一版）
 
-配置项 `TaskDone` 对应文件：`%USERPROFILE%\.config\opencode\plugins\chatpet-task-done.js`（opencode 在 Windows 按 XDG 解析 `~`；若 `%APPDATA%\opencode\plugins` 存在则优先使用，实现时探测两者）。
+配置项 `TaskDone` 对应文件：`%USERPROFILE%\.config\opencode\plugins\roxydesktoppet-task-done.js`（opencode 在 Windows 按 XDG 解析 `~`；若 `%APPDATA%\opencode\plugins` 存在则优先使用，实现时探测两者）。
 
 - **detect**：
   - 文件不存在 → `NotConfigured`。
-  - 文件存在但无 `// chatpet-hook` 标记 → `Error("文件已被其它工具占用")`，不覆盖，提示用户。
+  - 文件存在但无 `// roxydesktoppet-hook` 标记 → `Error("文件已被其它工具占用")`，不覆盖，提示用户。
   - 是我们的文件，但内嵌端口/Token 与当前设置不一致 → `NeedsUpdate`。
   - 一致 → `Configured`。
 - **write**（一键配置，幂等）：
-  1. 目标文件是他人文件 → 先备份为 `<file>.chatpet.bak-<ts>`。
-  2. 首次写入做 `.chatpet-original` 快照（或 `-missing` 哨兵）。
+  1. 目标文件是他人文件 → 先备份为 `<file>.roxydesktoppet.bak-<ts>`。
+  2. 首次写入做 `.roxydesktoppet-original` 快照（或 `-missing` 哨兵）。
   3. 写临时文件 + rename 原子替换，内容见下。
   4. 回读文件头校验标记与端口/Token，失败则回滚。
 - **remove**（删除配置）：
   1. 文件是我们的 → 删除。
-  2. 存在 `.chatpet.bak-<ts>`（说明覆盖了他人文件）→ 恢复备份。
-  3. 存在 `.chatpet-original` 快照且删除后恢复；原文件本来不存在则直接删除文件。
+  2. 存在 `.roxydesktoppet.bak-<ts>`（说明覆盖了他人文件）→ 恢复备份。
+  3. 存在 `.roxydesktoppet-original` 快照且删除后恢复；原文件本来不存在则直接删除文件。
   4. 文件不是我们的 → no-op 并提示。
 
 插件内容（Bun 运行时，`fetch` 可用）：
 
 ```js
-// chatpet-hook — written by ChatPet
-export const ChatPetHook = async ({ project, directory }) => {
+// roxydesktoppet-hook — written by RoxyDesktopPet
+export const RoxyDesktopPetHook = async ({ project, directory }) => {
   return {
     event: async ({ event }) => {
       const { type, properties } = event;
@@ -286,7 +286,7 @@ export const ChatPetHook = async ({ project, directory }) => {
       try {
         await fetch("http://127.0.0.1:PORT/hook/opencode", {
           method: "POST",
-          headers: { "content-type": "application/json", "x-chatpet-token": "TOKEN" },
+          headers: { "content-type": "application/json", "x-roxydesktoppet-token": "TOKEN" },
           body: JSON.stringify({
             tool: "opencode",
             event: kind,

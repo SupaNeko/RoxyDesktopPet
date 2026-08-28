@@ -68,7 +68,7 @@ pub fn init() {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("chatpet.log"))
+        .open(dir.join("roxydesktoppet.log"))
         .ok();
     let _ = LOG_FILE.set(Mutex::new(file));
 

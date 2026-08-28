@@ -3,12 +3,12 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
-  import { ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Trash2, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools } from './lib/api';
+  import { History, ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Trash2, X } from 'lucide-svelte';
+  import { getRuntimeStatus, getSettings, listMainSessionHistory, listMessages, saveSettings, sendMessage, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools } from './lib/api';
   import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
-  let settings = $state<AppSettings>({ pet_name: 'ChatPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30 });
+  let settings = $state<AppSettings>({ pet_name: 'RoxyDesktopPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30 });
   let runtime = $state<RuntimeStatus | null>(null), messages = $state<Message[]>([]);
   let text = $state(''), error = $state('');
   let busy = $state(false), bubbleVisible = $state(false), composerVisible = $state(false), saved = $state(false);
@@ -16,6 +16,9 @@
   let bubbleDisplaySeconds = $state(Number(localStorage.getItem('bubbleDisplaySeconds') || '30'));
   let petImageSize = $state(Number(localStorage.getItem('petImageSize') || '100'));
   let bubbleTimer: number | null = null;
+  // 待办创建提示框：与气泡共用显示时长设置，独立于气泡的显示/隐藏。
+  let todoNotice = $state<Todo | null>(null);
+  let todoNoticeTimer: number | null = null;
   type PetEmotion = 'shy' | 'affectionate' | 'sad' | 'happy' | 'calm' | 'angry' | 'battle' | 'self_deprecating';
   const petImages: Record<PetEmotion, string> = {
     shy: '/roxy-shy.png', affectionate: '/roxy-affectionate.png', sad: '/roxy-sad.png', happy: '/roxy-happy.png',
@@ -34,6 +37,24 @@
   let capturingShortcut = $state(false);
   let shortcutCaptureCommittedAt = 0;
   let todos = $state<Todo[]>([]);
+  // 历史会话页状态：按 created_at 游标向前翻页。
+  let historyMessages = $state<Message[]>([]);
+  let historyLoading = $state(false);
+  let historyExhausted = $state(false);
+  const HISTORY_PAGE_SIZE = 50;
+  async function loadHistoryPage(initial = false) {
+    if (historyLoading || (historyExhausted && !initial)) return;
+    historyLoading = true; error = '';
+    try {
+      const before = initial || historyMessages.length === 0 ? undefined : historyMessages[0].created_at;
+      const page = await listMainSessionHistory(before, HISTORY_PAGE_SIZE);
+      if (page.length < HISTORY_PAGE_SIZE) historyExhausted = true;
+      historyMessages = initial ? page : [...page, ...historyMessages];
+    } catch (e) { error = String(e); } finally { historyLoading = false; }
+  }
+  const sameDay = (a: number, b: number) => { const da = new Date(a), db = new Date(b); return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate(); };
+  const formatDay = (ts: number) => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(ts));
+  const formatTime = (ts: number) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ts));
   let settingsTab = $state<'general' | 'toolhook' | 'mcp'>('general');
   let mcpServers = $state<McpServerStatus[]>([]);
   let mcpEditing = $state<number | 'new' | null>(null);
@@ -168,10 +189,11 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<Todo>('todo-created', (event) => { todoNotice = event.payload; if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); todoNoticeTimer = window.setTimeout(() => { todoNotice = null; todoNoticeTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000); schedulePetHitTestLayout(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); if (label === 'history') { historyExhausted = false; loadHistoryPage(true); } }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
+    if (label === 'history') loadHistoryPage(true);
     if (label === 'settings') loadToolHookSupport();
-    return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); menuResizeObserver?.disconnect(); };
+    return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
     const content = text.trim(); if (!content || busy) return;
@@ -212,7 +234,7 @@
   async function toggleProactiveFromMenu() { error=''; try { const enabled=await toggleProactiveEnabled(); settings.proactive_enabled=enabled; } catch(e) { error=String(e); } }
   async function closeMenu() { if (label === 'pet-menu') await getCurrentWindow().hide(); }
   async function enablePassthroughFromMenu() { await changeMousePassthrough(true); await closeMenu(); }
-  async function openWindow(label: 'settings'|'todos') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
+  async function openWindow(label: 'settings'|'todos'|'history') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
   const formatDue = (timestamp: number) => new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(timestamp));
   const formatRepeat = (minutes: number) => minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
   async function removeTodo(id: string) {
@@ -256,11 +278,12 @@
       <button onclick={enablePassthroughFromMenu}><MousePointer2 size={15}/><span>启用鼠标穿透</span></button>
       <button onclick={()=>openWindow('settings')}><Settings size={15}/><span>打开设置</span></button>
       <button onclick={()=>openWindow('todos')}><ListTodo size={15}/><span>查看待办</span></button>
+      <button onclick={()=>openWindow('history')}><History size={15}/><span>历史会话</span></button>
     </div>
   </main>
 {:else if label === 'settings'}
   <main class="settings-page">
-    <header><span>CHATPET</span><h1>设置</h1></header>
+    <header><span>ROXYDESKTOPPET</span><h1>设置</h1></header>
     <nav class="settings-tabs">
       <button class:on={settingsTab === 'general'} onclick={() => settingsTab = 'general'}>常规</button>
       <button class:on={settingsTab === 'toolhook'} onclick={() => { settingsTab = 'toolhook'; loadToolHookSupport(); }}>编程联动</button>
@@ -289,7 +312,7 @@
     </section>
     <section><h2>模型 API</h2>
       <div class="model-summary"><strong>{settings.api_model || '未配置'}</strong><small>{settings.api_base_url}</small><span class:ready={settings.api_key_configured}>{settings.api_key_configured ? '已从 .env 读取 API Key' : '.env 缺少 API Key'}</span></div>
-      <p class="note">模型连接由项目根目录的 .env 管理。修改后请完全退出并重新启动 ChatPet。</p>
+      <p class="note">模型连接由项目根目录的 .env 管理。修改后请完全退出并重新启动 RoxyDesktopPet。</p>
     </section>
     <section><h2>联网搜索</h2>
       <label>搜索服务商
@@ -481,14 +504,43 @@
   </main>
 {:else if label === 'todos'}
   <main class="todos-page">
-    <header><span>CHATPET</span><h1>待办提醒</h1><small>{todos.length} 项未完成</small></header>
+    <header><span>ROXYDESKTOPPET</span><h1>待办提醒</h1><small>{todos.length} 项未完成</small></header>
     {#if error}<p class="error">{error}</p>{/if}
     {#if todos.length === 0}<div class="todo-empty"><ListTodo size={30}/><strong>目前没有待办</strong><span>对桌宠说“提醒我……”即可创建。</span></div>{:else}
       <div class="todo-list">{#each todos as todo (todo.id)}<article class:overdue={todo.due_at_utc < Date.now()}><i></i><div><strong>{todo.title}</strong><span>{formatDue(todo.due_at_utc)} · {todo.timezone}{#if todo.repeat_interval_minutes} · <em class="repeat-badge">{formatRepeat(todo.repeat_interval_minutes)}</em>{/if}</span></div><button class="todo-delete" aria-label="删除待办" title="删除" onclick={() => removeTodo(todo.id)}><Trash2 size={14}/></button></article>{/each}</div>
     {/if}
   </main>
+{:else if label === 'history'}
+  <main class="history-page">
+    <header><span>ROXYDESKTOPPET</span><h1>历史会话</h1><small>仅主会话对话</small></header>
+    {#if error}<p class="error">{error}</p>{/if}
+    <div class="history-list">
+      {#if !historyExhausted && historyMessages.length > 0}
+        <button class="ghost-button history-more" onclick={() => loadHistoryPage()} disabled={historyLoading}>{historyLoading ? '加载中…' : '加载更早的对话'}</button>
+      {/if}
+      {#if historyMessages.length === 0 && !historyLoading}
+        <div class="todo-empty"><MessageCircle size={30}/><strong>暂无历史会话</strong><span>和洛琪希聊几句之后再来吧。</span></div>
+      {/if}
+      {#each historyMessages as message, i (message.id)}
+        {@const prev = i > 0 ? historyMessages[i - 1] : null}
+        {#if !prev || !sameDay(prev.created_at, message.created_at)}
+          <div class="history-day">{formatDay(message.created_at)}</div>
+        {/if}
+        <div class="history-row" class:user={message.role === 'user'}>
+          <div class="history-bubble">
+            <p>{message.content}</p>
+            <time>{formatTime(message.created_at)}{#if message.role === 'user' && message.trigger_type === 'user_voice'} · 语音{/if}</time>
+          </div>
+        </div>
+      {/each}
+      {#if historyLoading && historyMessages.length > 0}<p class="history-hint">加载中…</p>{/if}
+    </div>
+  </main>
 {:else}
   <main class="pet-window" data-tauri-drag-region>
+    {#if todoNotice}
+      <div class="todo-notice"><ListTodo size={13}/><span>已创建待办：{todoNotice.title} · {formatDue(todoNotice.due_at_utc)}{todoNotice.repeat_interval_minutes ? `（${formatRepeat(todoNotice.repeat_interval_minutes)}）` : ''}</span></div>
+    {/if}
     {#if bubbleVisible || busy || error}
       <div class="speech-bubble" ><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p><button class="bubble-close" aria-label="关闭气泡" onclick={hideBubble}><X size={13} /></button></div>
     {/if}
@@ -582,12 +634,31 @@
   .todo-delete { flex:0 0 auto; display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:7px; color:#9a8c7d; background:transparent; cursor:pointer; }
   .todo-delete:hover { color:#b0493f; background:#f3e4de; }
   .repeat-badge { color:#8d563f; font-style:normal; }
+  .history-page { min-height:100vh; padding:27px 30px; color:#39332d; background:#f5f0e8; }
+  .history-page header { position:relative; margin-bottom:20px; }
+  .history-page header>span { color:#a05f43; font-size:10px; font-weight:700; letter-spacing:.18em; }
+  .history-page h1 { margin:3px 0 0; font:600 26px Georgia,"Microsoft YaHei UI",serif; }
+  .history-page header small { position:absolute; right:0; bottom:4px; color:#81766b; }
+  .history-list { display:grid; gap:8px; }
+  .history-more { justify-self:center; }
+  .history-more:disabled { opacity:.5; cursor:default; }
+  .history-day { justify-self:center; margin:10px 0 2px; padding:3px 12px; border-radius:999px; color:#81766b; background:#eae2d5; font-size:11px; }
+  .history-row { display:flex; }
+  .history-row.user { justify-content:flex-end; }
+  .history-bubble { max-width:78%; padding:10px 13px 6px; border:1px solid #ded2c4; border-radius:14px; background:#fffaf3; }
+  .history-row.user .history-bubble { color:#fff; border-color:#9b6047; background:#9b6047; }
+  .history-bubble p { margin:0; font-size:13px; line-height:1.6; overflow-wrap:anywhere; white-space:pre-wrap; }
+  .history-bubble time { display:block; margin-top:3px; color:#a3968a; font-size:10px; text-align:right; }
+  .history-row.user .history-bubble time { color:rgba(255,255,255,.72); }
+  .history-hint { justify-self:center; margin:4px 0 0; color:#81766b; font-size:11px; }
   .bubble-close { position:absolute; top:6px; right:8px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; color:#9a8c7d; background:transparent; cursor:pointer; }
   .bubble-close:hover { color:#5e4a3c; background:#f0e6da; }
   .range-value { justify-self: end; margin-top: -20px; color: #9b6047; font-variant-numeric: tabular-nums; }
   .settings-page input.size-slider { padding: 0; accent-color: #9b6047; cursor: pointer; }
   .pet-window { position: relative; pointer-events: none; }
   .pet { width: 172px; height: 198px; flex-shrink: 0; pointer-events: auto; }
+  .todo-notice { position: relative; flex-shrink: 0; width: calc(100% - 28px); margin: 0 14px 4px; padding: 8px 12px; display: flex; align-items: center; gap: 6px; border: 1px solid rgba(108,164,111,.65); border-radius: 12px; color: #38663c; background: #eef6ec; box-shadow: 0 8px 20px rgba(55,40,28,.12); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+  .todo-notice :global(svg) { flex-shrink: 0; }
   .speech-bubble { position: relative; flex-shrink: 0; width: calc(100% - 28px); margin: 0 14px 2px; padding: 13px 16px; border: 1px solid rgba(190,177,163,.85); border-radius: 18px; color: #39332d; background: #fff; box-shadow: 0 10px 26px rgba(55,40,28,.15); pointer-events: auto; }
   .speech-bubble::after { content: ''; position: absolute; left: 61%; bottom: -13px; width: 22px; height: 22px; border-right: 1px solid rgba(190,177,163,.85); border-bottom: 1px solid rgba(190,177,163,.85); background: #fff; transform: skew(-20deg) rotate(45deg); }
   .speech-bubble p { position: relative; z-index: 1; margin: 0; padding-right: 16px; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }

@@ -1,4 +1,4 @@
-# ChatPet 开发设计文档
+# RoxyDesktopPet 开发设计文档
 
 > 对应需求：`REQUIREMENTS.md`  
 > 推荐技术基线：Tauri 2 + Svelte 5 + Rust + SQLite + Qdrant  
@@ -6,12 +6,12 @@
 
 ## 1. 设计结论
 
-ChatPet 推荐沿用 AgentStage 的桌面技术栈和后端边界：Svelte 只负责界面，Rust/Tauri 后端持有 API Key、数据库、音频状态、调度器、Qdrant 客户端和 VITS 子进程。这样可以直接迁移 AgentStage 已验证的 OpenAI-compatible Provider、DPAPI/加密方式、SQLite 模式以及 VITS Runtime 管理代码。
+RoxyDesktopPet 推荐沿用 AgentStage 的桌面技术栈和后端边界：Svelte 只负责界面，Rust/Tauri 后端持有 API Key、数据库、音频状态、调度器、Qdrant 客户端和 VITS 子进程。这样可以直接迁移 AgentStage 已验证的 OpenAI-compatible Provider、DPAPI/加密方式、SQLite 模式以及 VITS Runtime 管理代码。
 
 不建议第一版再引入 Python Web 服务。Silero VAD 使用 ONNX Runtime 在 Rust 后端推理；VITS 继续保持现有独立 EXE，但属于可选组件。缺少 EXE 时应用以纯文本模式正常运行。主程序进程关系如下：
 
 ```text
-ChatPet.exe
+RoxyDesktopPet.exe
 ├─ WebView2/Svelte UI
 ├─ Rust Core
 │  ├─ Audio Capture + Silero VAD
@@ -46,9 +46,9 @@ ChatPet.exe
 
 需要修改的部分：
 
-- AgentStage 从角色数据库和会话关系中组装上下文；ChatPet 改为单角色配置、用户关系和 Qdrant 相关记忆。
-- AgentStage 缓存按 session/message 组织；ChatPet 可按 `conversation_id/message_id` 组织。
-- ChatPet 的语音生成由编排器自动触发，不只依赖消息上的手动播放按钮。
+- AgentStage 从角色数据库和会话关系中组装上下文；RoxyDesktopPet 改为单角色配置、用户关系和 Qdrant 相关记忆。
+- AgentStage 缓存按 session/message 组织；RoxyDesktopPet 可按 `conversation_id/message_id` 组织。
+- RoxyDesktopPet 的语音生成由编排器自动触发，不只依赖消息上的手动播放按钮。
 - `stderr` 不建议直接丢弃，应接入大小受限且脱敏的运行时日志，便于定位模型加载失败。
 - VITS 10 分钟超时可保留为上限，但 UI 应在更短时间给出“仍在合成”状态，并允许取消过期的非可靠语音任务。
 
@@ -64,7 +64,7 @@ ChatPet.exe
 ## 3. 推荐目录结构
 
 ```text
-ChatPet/
+RoxyDesktopPet/
 ├─ README.md
 ├─ docs/
 │  ├─ REQUIREMENTS.md
@@ -92,7 +92,7 @@ ChatPet/
 │  ├─ vad/silero_vad.onnx
 │  └─ default-avatar.png
 └─ data/                        # 运行时创建，不入库
-   ├─ chatpet.db
+   ├─ roxydesktoppet.db
    ├─ qdrant/
    ├─ vits_runtime/
    ├─ vits_models/
@@ -155,9 +155,9 @@ P2 ambient：主动消息、系统事件
 Windows 音频设备分为 capture endpoint 和 render endpoint：
 
 ```text
-麦克风 capture endpoint ──> ChatPet Capture ──> VAD ──> ASR
+麦克风 capture endpoint ──> RoxyDesktopPet Capture ──> VAD ──> ASR
 
-ChatPet WAV ──> render endpoint ──> 扬声器/耳机
+RoxyDesktopPet WAV ──> render endpoint ──> 扬声器/耳机
 其他应用 ─────> render endpoint ──> 扬声器/耳机
 ```
 
@@ -363,7 +363,7 @@ VITS 失败：保留文本提醒和 Windows 通知
 名称建议包含 embedding 身份：
 
 ```text
-chatpet_memories_{provider}_{model}_{dimension}_{distance}
+roxydesktoppet_memories_{provider}_{model}_{dimension}_{distance}
 ```
 
 示例 payload：

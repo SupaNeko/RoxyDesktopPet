@@ -66,7 +66,7 @@ pub async fn embed(config: &MemoryConfig, text: &str) -> Result<Vec<f32>, String
 pub async fn health(config: &MemoryConfig) -> bool {
     config.is_complete()
 }
-fn cosine(a: &[f32], b: &[f32]) -> f64 {
+pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }

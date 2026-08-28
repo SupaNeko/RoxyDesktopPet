@@ -442,6 +442,29 @@ pub async fn list_messages(
     db::list_messages(&conn, limit).map_err(|e| e.to_string())
 }
 
+/// 历史会话页：分页查询主会话（用户输入 + 主会话回复），before 为上一页最旧一条的 created_at。
+#[tauri::command]
+pub async fn list_main_session_history(
+    db_state: State<'_, DbState>,
+    before: Option<i64>,
+    limit: u32,
+) -> Result<Vec<Message>, String> {
+    let conn = db_state.0.lock().await;
+    db::list_main_session_messages(&conn, before, limit).map_err(|e| e.to_string())
+}
+
+/// 读取观察者维护的“用户偏好”滚动总结，无条件注入系统提示词；失败降级为“暂无”，不阻断聊天。
+fn user_preference_context(conn: &rusqlite::Connection) -> String {
+    match db::get_user_preference_summary(conn) {
+        Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
+        Ok(_) => "暂无".into(),
+        Err(e) => {
+            log_warn!("user preference summary read failed: {e}");
+            "暂无".into()
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn get_runtime_status(
     db_state: State<'_, DbState>,
@@ -798,12 +821,13 @@ async fn process_message(
         trigger_type: trigger_type.into(),
         created_at: chrono::Utc::now().timestamp_millis(),
     };
-    let (mut settings, history) = {
+    let (mut settings, history, preference_context) = {
         let conn = db_state.0.lock().await;
         db::insert_message(&conn, &user).map_err(|e| e.to_string())?;
         (
             db::get_settings(&conn, true).map_err(|e| e.to_string())?,
             db::list_messages(&conn, 30).map_err(|e| e.to_string())?,
+            user_preference_context(&conn),
         )
     };
     apply_memory_env(&mut settings, memory_env);
@@ -847,8 +871,8 @@ async fn process_message(
     };
     let mcp_context = build_mcp_context(&mcp_tools, &agent_runs, search_available);
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
-        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
-        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, system_context, mcp_context
+        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}\n用户偏好（长期观察总结，始终生效，请自然遵循，不要刻意复述）：\n{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
+        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, preference_context, system_context, mcp_context
     )})];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
@@ -1001,20 +1025,22 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
                         .filter(|v| *v >= 1.0 && *v <= 525_600.0)
                         .map(|v| v.round() as i64);
                     let mut conn = db_state.0.lock().await;
-                    serde_json::to_string(
-                        &db::create_todo(
-                            &mut conn,
-                            title,
-                            due,
-                            args.get("timezone")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Asia/Shanghai"),
-                            Some(source_message_id),
-                            repeat,
-                        )
-                        .map_err(|e| e.to_string())?,
+                    let todo = db::create_todo(
+                        &mut conn,
+                        title,
+                        due,
+                        args.get("timezone")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Asia/Shanghai"),
+                        Some(source_message_id),
+                        repeat,
                     )
-                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                    drop(conn);
+                    // 通知前端弹出“已创建待办”提示框：让创建动作可被用户直接察觉，
+                    // 避免模型声称已创建但实际没有的情况无从发现。
+                    let _ = app.emit("todo-created", &todo);
+                    serde_json::to_string(&todo).map_err(|e| e.to_string())?
                 }
                 "list_todos" => {
                     let conn = db_state.0.lock().await;
@@ -1088,11 +1114,12 @@ pub async fn generate_scheduled_message(
     if model.api_key.is_empty() {
         return Err("未配置 DeepSeek API Key".into());
     }
-    let (history, settings) = {
+    let (history, settings, preference_context) = {
         let conn = db_state.0.lock().await;
         (
             db::list_messages(&conn, 20).map_err(|e| e.to_string())?,
             db::get_settings(&conn, true).map_err(|e| e.to_string())?,
+            user_preference_context(&conn),
         )
     };
     let system_context = if settings.system_status_enabled
@@ -1104,7 +1131,7 @@ pub async fn generate_scheduled_message(
         String::new()
     };
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。\n这是一次{}触发。请保持角色身份生成简短消息。{}{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。不要虚构电脑状态。",ROXY_NAME,ROXY_PERSONA,local_time_description(),trigger_type,NATURAL_SPEECH_RULES,system_context)}),
+        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。\n这是一次{}触发。请保持角色身份生成简短消息。{}\n用户偏好（长期观察总结，始终生效，请自然遵循，不要刻意复述）：\n{}{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。不要虚构电脑状态。",ROXY_NAME,ROXY_PERSONA,local_time_description(),trigger_type,NATURAL_SPEECH_RULES,preference_context,system_context)}),
     ];
     messages.extend(history_to_json(history));
     messages.push(serde_json::json!({"role":"user","content":event}));
@@ -1319,7 +1346,7 @@ pub fn show_pet_menu(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_app_window(app: AppHandle, label: String) -> Result<(), String> {
-    if !matches!(label.as_str(), "settings" | "todos") {
+    if !matches!(label.as_str(), "settings" | "todos" | "history") {
         return Err("不允许打开该窗口".into());
     }
     let window = app

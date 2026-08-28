@@ -1,6 +1,6 @@
 [package]
-name = "chatpet"
-version = "0.1.0"
+name = "roxydesktoppet"
+version = "0.1.2"
 description = "A local-first Windows AI desktop companion"
 edition = "2021"
 rust-version = "1.80"
@@ -12,7 +12,7 @@ name = "RoxyDesktopPet"
 path = "src/main.rs"
 
 [lib]
-name = "chatpet_lib"
+name = "roxydesktoppet_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

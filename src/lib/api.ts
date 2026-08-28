@@ -42,6 +42,11 @@ export async function listMessages(): Promise<Message[]> {
   return inTauri() ? invoke('list_messages', { limit: 100 }) : [];
 }
 
+// 历史会话页：分页加载主会话（用户输入 + 主会话回复），before 为上一页最旧一条的 created_at。
+export async function listMainSessionHistory(before?: number, limit = 50): Promise<Message[]> {
+  return inTauri() ? invoke('list_main_session_history', { before: before ?? null, limit }) : [];
+}
+
 export async function sendMessage(content: string): Promise<Message> {
   if (!inTauri()) {
     await new Promise((resolve) => setTimeout(resolve, 450));
@@ -67,7 +72,7 @@ export async function testVoiceOutput(): Promise<void> { if (inTauri()) await in
 export async function startGptSovits(): Promise<void> { if (inTauri()) await invoke('start_gpt_sovits'); }
 export async function listTodos(): Promise<Todo[]> { return inTauri() ? invoke('list_todos') : []; }
 export async function deleteTodo(id: string): Promise<boolean> { return inTauri() ? invoke('delete_todo', { id }) : true; }
-export async function openAppWindow(label: 'settings' | 'todos'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
+export async function openAppWindow(label: 'settings' | 'todos' | 'history'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
 export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
 export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }
 

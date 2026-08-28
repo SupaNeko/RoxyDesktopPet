@@ -254,8 +254,10 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          CREATE TABLE IF NOT EXISTS memory_events (id TEXT PRIMARY KEY, first_message_rowid INTEGER NOT NULL, last_message_rowid INTEGER NOT NULL, transcript TEXT NOT NULL, observer_result TEXT, status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL, processed_at INTEGER);
          CREATE TABLE IF NOT EXISTS memory_revisions (id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, action TEXT NOT NULL, old_text TEXT, new_text TEXT, source_event_id TEXT, created_at INTEGER NOT NULL, FOREIGN KEY(memory_id) REFERENCES memories(id));
          CREATE TABLE IF NOT EXISTS memory_observer_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_message_rowid INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS user_preference_summary (id INTEGER PRIMARY KEY CHECK (id = 1), text TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0);
          INSERT OR IGNORE INTO scheduler_state(id, proactive_count) VALUES(1, 0);
          INSERT OR IGNORE INTO memory_observer_state(id) VALUES(1);
+         INSERT OR IGNORE INTO user_preference_summary(id) VALUES(1);
          CREATE TABLE IF NOT EXISTS mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL, command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '', timeout_seconds INTEGER NOT NULL DEFAULT 120, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, finished_at INTEGER);
          CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
@@ -548,6 +550,53 @@ pub fn list_messages(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<Mess
         })?
         .collect();
     messages
+}
+
+/// 主会话历史分页查询：只包含用户输入与主会话回复（user_text/user_voice），
+/// 按 created_at 游标向前翻页（before 缺省表示从最新开始），返回按时间正序。
+pub fn list_main_session_messages(
+    conn: &Connection,
+    before: Option<i64>,
+    limit: u32,
+) -> rusqlite::Result<Vec<Message>> {
+    let before = before.unwrap_or(i64::MAX);
+    let mut stmt = conn.prepare(
+        // 注意：SQLite 的 SELECT * 不含 rowid 伪列，子查询需显式取出供外层排序。
+        "SELECT id, role, content, japanese_text, emotion, trigger_type, created_at FROM (\
+         SELECT rowid AS _rid, * FROM messages WHERE trigger_type IN ('user_text','user_voice') AND created_at < ? \
+         ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, _rid",
+    )?;
+    let messages = stmt
+        .query_map(params![before, limit.min(500)], |r| {
+            Ok(Message {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                content: r.get(2)?,
+                japanese_text: r.get(3)?,
+                emotion: r.get(4)?,
+                trigger_type: r.get(5)?,
+                created_at: r.get(6)?,
+            })
+        })?
+        .collect();
+    messages
+}
+
+/// 读取观察者维护的"用户偏好"滚动总结；缺行/空值时返回空字符串。
+pub fn get_user_preference_summary(conn: &Connection) -> rusqlite::Result<String> {
+    conn.query_row(
+        "SELECT text FROM user_preference_summary WHERE id=1",
+        [],
+        |r| r.get(0),
+    )
+}
+
+pub fn set_user_preference_summary(conn: &Connection, text: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE user_preference_summary SET text=?, updated_at=? WHERE id=1",
+        params![text, chrono::Utc::now().timestamp_millis()],
+    )?;
+    Ok(())
 }
 
 pub fn observer_message_batch(
@@ -1039,5 +1088,50 @@ mod tests {
         let second = observer_message_batch(&conn, 10).unwrap();
         assert_eq!(second.len(), 2);
         assert_eq!(second[0].1.content, "message 2");
+    }
+
+    #[test]
+    fn main_session_history_filters_and_paginates() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("test.db")).unwrap();
+        for index in 0..5 {
+            insert_message(
+                &conn,
+                &Message {
+                    id: format!("m{index}"),
+                    role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+                    content: format!("main {index}"),
+                    japanese_text: None,
+                    emotion: None,
+                    trigger_type: "user_text".into(),
+                    created_at: index * 10,
+                },
+            )
+            .unwrap();
+        }
+        // 非主会话消息（主动搭话）应被过滤。
+        insert_message(
+            &conn,
+            &Message {
+                id: "p1".into(),
+                role: "assistant".into(),
+                content: "proactive".into(),
+                japanese_text: None,
+                emotion: None,
+                trigger_type: "proactive".into(),
+                created_at: 100,
+            },
+        )
+        .unwrap();
+        // 最新一页：2 条，返回正序。
+        let latest = list_main_session_messages(&conn, None, 2).unwrap();
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest[0].created_at, 30);
+        assert_eq!(latest[1].created_at, 40);
+        // 以页首 created_at 为游标向前翻页。
+        let earlier = list_main_session_messages(&conn, Some(latest[0].created_at), 10).unwrap();
+        assert_eq!(earlier.len(), 3);
+        assert_eq!(earlier[0].created_at, 0);
+        assert_eq!(earlier[2].created_at, 20);
     }
 }

@@ -246,8 +246,17 @@ fn save_pet_window_position(window: &tauri::WebviewWindow, position: tauri::Phys
 }
 pub fn run() {
     crate::logger::init();
-    let db = db::open(&data_dir().join("chatpet.db")).expect("failed to open ChatPet database");
-    log_info!("数据库已打开：{}", data_dir().join("chatpet.db").display());
+    // 数据库文件名已从 chatpet.db 更名为 roxydesktoppet.db；旧文件存在且新文件不存在时自动迁移，保留历史数据。
+    let db_path = data_dir().join("roxydesktoppet.db");
+    let legacy_db_path = data_dir().join("chatpet.db");
+    if !db_path.exists() && legacy_db_path.exists() {
+        match std::fs::rename(&legacy_db_path, &db_path) {
+            Ok(_) => log_info!("已将旧数据库 chatpet.db 迁移为 roxydesktoppet.db"),
+            Err(err) => log_warn!("旧数据库迁移失败（{}），将创建新数据库", err),
+        }
+    }
+    let db = db::open(&db_path).expect("failed to open RoxyDesktopPet database");
+    log_info!("数据库已打开：{}", db_path.display());
     let voice_enabled = db::get_settings(&db, false)
         .ok()
         .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
@@ -380,6 +389,15 @@ pub fn run() {
                     }
                 });
             }
+            if let Some(history_window) = app.get_webview_window("history") {
+                let window_to_hide = history_window.clone();
+                history_window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
 
             if let Some(menu_window) = app.get_webview_window("pet-menu") {
                 let window_to_hide = menu_window.clone();
@@ -436,15 +454,22 @@ pub fn run() {
                             let _ = w.set_focus();
                         }
                     }
+                    "pet_history" => {
+                        if let Some(w) = window.app_handle().get_webview_window("history") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
                     _ => {}
                 });
             }
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+            let history = MenuItem::with_id(app, "history", "历史会话", true, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "显示/隐藏桌宠", true, None::<&str>)?;
             let passthrough =
                 MenuItem::with_id(app, "passthrough", "切换鼠标穿透", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings, &toggle, &passthrough, &quit])?;
+            let menu = Menu::with_items(app, &[&settings, &history, &toggle, &passthrough, &quit])?;
             let tray_icon = app.default_window_icon().cloned();
             let mut tray_builder = TrayIconBuilder::new();
             if let Some(icon) = tray_icon {
@@ -456,6 +481,12 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "settings" => {
                         if let Some(w) = app.get_webview_window("settings") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "history" => {
+                        if let Some(w) = app.get_webview_window("history") {
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
@@ -506,6 +537,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::list_messages,
+            commands::list_main_session_history,
             commands::get_runtime_status,
             commands::send_text_message,
             commands::start_voice_listening,
@@ -543,5 +575,5 @@ pub fn run() {
             native_hit_test::update_pet_hit_test_layout
         ])
         .run(tauri::generate_context!())
-        .expect("error while running ChatPet");
+        .expect("error while running RoxyDesktopPet");
 }
