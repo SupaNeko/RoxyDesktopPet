@@ -442,7 +442,7 @@ pub async fn list_messages(
     db::list_messages(&conn, limit).map_err(|e| e.to_string())
 }
 
-/// 历史会话页：分页查询主会话（用户输入 + 主会话回复），before 为上一页最旧一条的 created_at。
+/// 历史会话页：分页查询主会话（用户输入 + 主会话回复 + AI 主动消息/提醒），before 为上一页最旧一条的 created_at。
 #[tauri::command]
 pub async fn list_main_session_history(
     db_state: State<'_, DbState>,
@@ -961,7 +961,7 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
     ];
     tools.extend(mcp_tools.iter().map(|t| t.to_openai_tool()));
     let mut messages = vec![
-        serde_json::json!({"role":"system","content":format!("你是对话后的隐性工具审计器。当前时间：{}，时区 Asia/Shanghai。检查最新用户请求是否需要调用工具，默认不调用任何工具。\n只有用户明确要求被提醒或记录到点事项时才调用 create_todo，例如「提醒我……」「……的时候叫我」「帮我记一下……」；用户要求「每隔 N 分钟/小时/天提醒我……」这类循环提醒时，额外填 repeat_every_minutes（换算成分钟）。用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办。绝不根据你自己的判断主动为用户安排提醒。\n只有用户明确要求删除、取消某个待办或循环提醒时才调用 delete_todo，且必须先调用 list_todos 确认要删的待办 id；用户描述模糊、匹配不到唯一待办时不要删。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。提醒时间有实质歧义时不要创建。{}",local_time_description(),mcp_prompt)}),
+        serde_json::json!({"role":"system","content":format!("你是对话后的工具执行器，负责把用户的请求真正落地。当前时间：{}，时区 Asia/Shanghai。\n背景：主会话已经口头回复了用户，但主会话无法执行任何实际操作，它只是“说”了会做。这段额外调用是唯一能真正执行动作的地方——如果用户要求了提醒而你在这里没有调用 create_todo，这个提醒就永远不会被创建，用户会在到点时什么都收不到。\n因此，只要用户说了「提醒我……」「……的时候叫我」「帮我记一下……」等要求被提醒或记录到点事项的话，就必须调用 create_todo 完成创建，不要只停留在口头确认；用户要求「每隔 N 分钟/小时/天提醒我……」这类循环提醒时，额外填 repeat_every_minutes（换算成分钟）。提醒时间有实质歧义时不要创建。\n只有用户明确要求删除、取消某个待办或循环提醒时才调用 delete_todo，且必须先调用 list_todos 确认要删的待办 id；用户描述模糊、匹配不到唯一待办时不要删。\n除上述情况外不要调用任何工具：用户只是在陈述事实、表达感受或闲聊，或者角色单方面提出建议（如劝用户休息、建议做某事）而用户并未要求提醒，都不要创建待办；绝不根据你自己的判断主动为用户安排提醒。\n不要重写或补充用户可见回复；不需要工具时直接返回空文本。{}",local_time_description(),mcp_prompt)}),
     ];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();

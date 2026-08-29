@@ -552,7 +552,8 @@ pub fn list_messages(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<Mess
     messages
 }
 
-/// 主会话历史分页查询：只包含用户输入与主会话回复（user_text/user_voice），
+/// 主会话历史分页查询：包含用户输入、主会话回复（user_text/user_voice）
+/// 以及 AI 主动发起的消息（提醒/主动搭话/工具提醒/任务转告），
 /// 按 created_at 游标向前翻页（before 缺省表示从最新开始），返回按时间正序。
 pub fn list_main_session_messages(
     conn: &Connection,
@@ -563,7 +564,9 @@ pub fn list_main_session_messages(
     let mut stmt = conn.prepare(
         // 注意：SQLite 的 SELECT * 不含 rowid 伪列，子查询需显式取出供外层排序。
         "SELECT id, role, content, japanese_text, emotion, trigger_type, created_at FROM (\
-         SELECT rowid AS _rid, * FROM messages WHERE trigger_type IN ('user_text','user_voice') AND created_at < ? \
+         SELECT rowid AS _rid, * FROM messages \
+         WHERE trigger_type IN ('user_text','user_voice','reminder_due','companion_tick','tool_hook','agent_followup') \
+         AND created_at < ? \
          ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, _rid",
     )?;
     let messages = stmt
@@ -1109,7 +1112,7 @@ mod tests {
             )
             .unwrap();
         }
-        // 非主会话消息（主动搭话）应被过滤。
+        // 主动搭话消息（companion_tick）应被包含。
         insert_message(
             &conn,
             &Message {
@@ -1118,20 +1121,34 @@ mod tests {
                 content: "proactive".into(),
                 japanese_text: None,
                 emotion: None,
-                trigger_type: "proactive".into(),
+                trigger_type: "companion_tick".into(),
                 created_at: 100,
             },
         )
         .unwrap();
-        // 最新一页：2 条，返回正序。
+        // 语音测试消息（voice_test）不属于会话历史，应被过滤。
+        insert_message(
+            &conn,
+            &Message {
+                id: "v1".into(),
+                role: "assistant".into(),
+                content: "voice test".into(),
+                japanese_text: None,
+                emotion: None,
+                trigger_type: "voice_test".into(),
+                created_at: 110,
+            },
+        )
+        .unwrap();
+        // 最新一页：2 条，返回正序（含主动搭话，不含语音测试）。
         let latest = list_main_session_messages(&conn, None, 2).unwrap();
         assert_eq!(latest.len(), 2);
-        assert_eq!(latest[0].created_at, 30);
-        assert_eq!(latest[1].created_at, 40);
+        assert_eq!(latest[0].created_at, 40);
+        assert_eq!(latest[1].created_at, 100);
         // 以页首 created_at 为游标向前翻页。
         let earlier = list_main_session_messages(&conn, Some(latest[0].created_at), 10).unwrap();
-        assert_eq!(earlier.len(), 3);
+        assert_eq!(earlier.len(), 4);
         assert_eq!(earlier[0].created_at, 0);
-        assert_eq!(earlier[2].created_at, 20);
+        assert_eq!(earlier[3].created_at, 30);
     }
 }

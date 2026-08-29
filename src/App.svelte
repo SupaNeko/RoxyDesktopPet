@@ -50,9 +50,13 @@
       const page = await listMainSessionHistory(before, HISTORY_PAGE_SIZE);
       if (page.length < HISTORY_PAGE_SIZE) historyExhausted = true;
       historyMessages = initial ? page : [...page, ...historyMessages];
+      // 首次加载/刷新后滚动到底部，默认显示最新会话。
+      if (initial) { await tick(); window.scrollTo(0, document.documentElement.scrollHeight); }
     } catch (e) { error = String(e); } finally { historyLoading = false; }
   }
   const sameDay = (a: number, b: number) => { const da = new Date(a), db = new Date(b); return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate(); };
+  // AI 主动发起的消息在历史页上的来源标签（trigger_type → 中文标签）。
+  const TRIGGER_LABELS: Record<string, string> = { reminder_due: '提醒', companion_tick: '主动搭话', tool_hook: '工具提醒', agent_followup: '任务转告' };
   const formatDay = (ts: number) => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(ts));
   const formatTime = (ts: number) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ts));
   let settingsTab = $state<'general' | 'toolhook' | 'mcp'>('general');
@@ -512,7 +516,7 @@
   </main>
 {:else if label === 'history'}
   <main class="history-page">
-    <header><span>ROXYDESKTOPPET</span><h1>历史会话</h1><small>仅主会话对话</small></header>
+    <header><span>ROXYDESKTOPPET</span><h1>历史会话</h1><small>含主动消息与提醒</small></header>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="history-list">
       {#if !historyExhausted && historyMessages.length > 0}
@@ -529,7 +533,7 @@
         <div class="history-row" class:user={message.role === 'user'}>
           <div class="history-bubble">
             <p>{message.content}</p>
-            <time>{formatTime(message.created_at)}{#if message.role === 'user' && message.trigger_type === 'user_voice'} · 语音{/if}</time>
+            <time>{formatTime(message.created_at)}{#if message.role === 'user' && message.trigger_type === 'user_voice'} · 语音{:else if TRIGGER_LABELS[message.trigger_type]} · {TRIGGER_LABELS[message.trigger_type]}{/if}</time>
           </div>
         </div>
       {/each}
