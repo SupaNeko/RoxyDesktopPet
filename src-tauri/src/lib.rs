@@ -554,6 +554,7 @@ pub fn run() {
             commands::open_app_window,
             commands::show_pet_menu,
             commands::toggle_proactive_enabled,
+            commands::set_pet_outfit,
             commands::scan_vits_models,
             commands::test_voice_output,
             commands::start_gpt_sovits,

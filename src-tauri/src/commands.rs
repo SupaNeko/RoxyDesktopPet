@@ -112,6 +112,8 @@ pub struct SaveSettingsRequest {
     pub voice_input_mode: String,
     pub push_to_talk_shortcut: String,
     pub pet_show_on_fullscreen: bool,
+    #[serde(default = "default_pet_outfit")]
+    pub pet_outfit: String,
     #[serde(default)]
     pub search_provider: String,
     #[serde(default)]
@@ -124,6 +126,10 @@ pub struct SaveSettingsRequest {
 
 fn default_agent_max_tool_rounds() -> u32 {
     30
+}
+
+fn default_pet_outfit() -> String {
+    "default".into()
 }
 
 #[derive(Serialize)]
@@ -381,6 +387,11 @@ pub async fn save_settings(
         },
         push_to_talk_shortcut: request.push_to_talk_shortcut,
         pet_show_on_fullscreen: request.pet_show_on_fullscreen,
+        pet_outfit: if request.pet_outfit.trim().is_empty() {
+            "default".into()
+        } else {
+            request.pet_outfit.trim().into()
+        },
         search_provider: match request.search_provider.trim().to_ascii_lowercase().as_str() {
             "bocha" => "bocha".into(),
             "tavily" => "tavily".into(),
@@ -1313,6 +1324,25 @@ pub async fn toggle_proactive_enabled(
     };
     let _ = app.emit("proactive-enabled-changed", enabled);
     Ok(enabled)
+}
+
+#[tauri::command]
+pub async fn set_pet_outfit(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    outfit: String,
+) -> Result<String, String> {
+    let outfit = if outfit.trim().is_empty() {
+        "default".to_string()
+    } else {
+        outfit.trim().to_string()
+    };
+    {
+        let conn = db_state.0.lock().await;
+        db::set_pet_outfit(&conn, &outfit).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("pet-outfit-changed", outfit.clone());
+    Ok(outfit)
 }
 
 #[tauri::command]

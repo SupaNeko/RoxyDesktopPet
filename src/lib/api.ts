@@ -24,7 +24,7 @@ const demoSettings: AppSettings = {
   qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30,
   tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true,
   system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false,
-  voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true,
+  voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default',
   search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false,
   agent_max_tool_rounds: 30
 };
@@ -75,6 +75,7 @@ export async function deleteTodo(id: string): Promise<boolean> { return inTauri(
 export async function openAppWindow(label: 'settings' | 'todos' | 'history'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
 export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
 export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }
+export async function setPetOutfit(outfit: string): Promise<string> { return inTauri() ? invoke('set_pet_outfit', { outfit }) : outfit; }
 
 export async function setMousePassthrough(enabled: boolean): Promise<void> { if (inTauri()) await invoke('set_mouse_passthrough', { enabled }); }
 export async function getMousePassthrough(): Promise<boolean> { return inTauri() ? invoke('get_mouse_passthrough') : false; }
