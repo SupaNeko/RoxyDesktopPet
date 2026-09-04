@@ -76,6 +76,7 @@ async fn run_agent_task(app: &AppHandle, run_id: i64, task: &str) -> Result<(), 
             return Err(format!("代理模型返回 {}", response.status()));
         }
         let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        crate::usage::record_chat_response(crate::usage::CAT_AGENT, &body).await;
         let message = body
             .pointer("/choices/0/message")
             .cloned()
@@ -150,6 +151,7 @@ async fn run_agent_task(app: &AppHandle, run_id: i64, task: &str) -> Result<(), 
             .await;
         if let Ok(response) = response {
             if let Ok(body) = response.json::<serde_json::Value>().await {
+                crate::usage::record_chat_response(crate::usage::CAT_AGENT, &body).await;
                 summary = body
                     .pointer("/choices/0/message/content")
                     .and_then(|v| v.as_str())

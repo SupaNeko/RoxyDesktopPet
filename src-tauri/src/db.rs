@@ -222,6 +222,18 @@ pub struct AgentRun {
     pub finished_at: Option<i64>,
 }
 
+/// 单个分类的 API 消耗汇总（今日 / 累计两段）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSummary {
+    pub category: String,
+    pub calls_today: i64,
+    pub prompt_today: i64,
+    pub completion_today: i64,
+    pub calls_total: i64,
+    pub prompt_total: i64,
+    pub completion_total: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DueReminder {
     pub occurrence_id: String,
@@ -266,7 +278,9 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
          INSERT OR IGNORE INTO user_preference_summary(id) VALUES(1);
          CREATE TABLE IF NOT EXISTS mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, transport TEXT NOT NULL, command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', headers TEXT NOT NULL DEFAULT '', timeout_seconds INTEGER NOT NULL DEFAULT 120, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS agent_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, finished_at INTEGER);
+         CREATE TABLE IF NOT EXISTS usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, category TEXT NOT NULL, prompt_tokens INTEGER NOT NULL, completion_tokens INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+         CREATE INDEX IF NOT EXISTS idx_usage_events_created_at ON usage_events(created_at);
          CREATE INDEX IF NOT EXISTS idx_occurrences_due ON reminder_occurrences(status, scheduled_at_utc);",
     )?;
     let message_columns: Vec<String> = conn
@@ -959,9 +973,86 @@ pub fn list_recent_agent_runs(conn: &Connection, limit: u32) -> rusqlite::Result
     rows
 }
 
+/// 记录一次 API 调用消耗（ASR 等无 token 的调用传 0）。
+pub fn insert_usage_event(
+    conn: &Connection,
+    category: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO usage_events(created_at,category,prompt_tokens,completion_tokens) VALUES(?,?,?,?)",
+        params![now, category, prompt_tokens, completion_tokens],
+    )?;
+    Ok(())
+}
+
+/// 按分类汇总消耗：today_start_ms 为当地当日 0 点的 UTC 毫秒时间戳。
+pub fn summarize_usage(conn: &Connection, today_start_ms: i64) -> rusqlite::Result<Vec<UsageSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT category,
+                COUNT(*),
+                COALESCE(SUM(prompt_tokens),0),
+                COALESCE(SUM(completion_tokens),0),
+                COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN created_at >= ? THEN prompt_tokens ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN created_at >= ? THEN completion_tokens ELSE 0 END),0)
+         FROM usage_events GROUP BY category",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![today_start_ms, today_start_ms, today_start_ms],
+            |r| {
+                Ok(UsageSummary {
+                    category: r.get(0)?,
+                    calls_total: r.get(1)?,
+                    prompt_total: r.get(2)?,
+                    completion_total: r.get(3)?,
+                    calls_today: r.get(4)?,
+                    prompt_today: r.get(5)?,
+                    completion_today: r.get(6)?,
+                })
+            },
+        )?
+        .collect();
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_events_summary_splits_today() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("test.db")).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        // 直接写入一条“昨天”的记录，验证今日/累计口径分离
+        conn.execute(
+            "INSERT INTO usage_events(created_at,category,prompt_tokens,completion_tokens) VALUES(?,?,?,?)",
+            params![now - 86_460_000, "chat", 100i64, 10i64],
+        )
+        .unwrap();
+        insert_usage_event(&conn, "chat", 200, 20).unwrap();
+        insert_usage_event(&conn, "observer", 50, 5).unwrap();
+        insert_usage_event(&conn, "asr", 0, 0).unwrap();
+        let summaries = summarize_usage(&conn, now - 60_000).unwrap();
+        let chat = summaries.iter().find(|s| s.category == "chat").unwrap();
+        assert_eq!(chat.calls_total, 2);
+        assert_eq!(chat.prompt_total, 300);
+        assert_eq!(chat.completion_total, 30);
+        assert_eq!(chat.calls_today, 1);
+        assert_eq!(chat.prompt_today, 200);
+        assert_eq!(chat.completion_today, 20);
+        let observer = summaries.iter().find(|s| s.category == "observer").unwrap();
+        assert_eq!(observer.calls_total, 1);
+        assert_eq!(observer.calls_today, 1);
+        let asr = summaries.iter().find(|s| s.category == "asr").unwrap();
+        assert_eq!(asr.calls_total, 1);
+        assert_eq!(asr.prompt_total, 0);
+        assert_eq!(asr.completion_total, 0);
+    }
     #[test]
     fn settings_and_messages_round_trip() {
         let dir = tempfile::tempdir().unwrap();

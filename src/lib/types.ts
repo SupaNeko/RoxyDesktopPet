@@ -149,3 +149,14 @@ export interface HardwareStats {
 }
 
 export interface NowPlaying { title: string; artist: string; album: string; source_app: string; playing: boolean; }
+
+/** 单个分类的 API 消耗汇总（今日 / 累计两段） */
+export interface UsageSummary {
+  category: string;
+  calls_today: number;
+  prompt_today: number;
+  completion_today: number;
+  calls_total: number;
+  prompt_total: number;
+  completion_total: number;
+}

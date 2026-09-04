@@ -22,6 +22,7 @@ mod search;
 mod system_monitor;
 mod tool_hook;
 mod tool_hook_config;
+mod usage;
 mod voice_output;
 
 use std::{
@@ -319,6 +320,7 @@ pub fn run() {
             global_input::ensure_hooks();
             scheduler::start(app.handle().clone());
             fullscreen_watch::start(app.handle().clone());
+            usage::init(app.handle());
 
             // 恢复上次的语音输入方式（持续监听 / 按住说话快捷键）。
             {
@@ -415,32 +417,17 @@ pub fn run() {
             // 启动时拉起已启用的 MCP 服务器（stdio 子进程 + 远程连接）。
             mcp::bootstrap(app.handle().clone(), mcp_servers.clone());
 
-            if let Some(settings_window) = app.get_webview_window("settings") {
-                let window_to_hide = settings_window.clone();
-                settings_window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_to_hide.hide();
-                    }
-                });
-            }
-            if let Some(todos_window) = app.get_webview_window("todos") {
-                let window_to_hide = todos_window.clone();
-                todos_window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_to_hide.hide();
-                    }
-                });
-            }
-            if let Some(history_window) = app.get_webview_window("history") {
-                let window_to_hide = history_window.clone();
-                history_window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_to_hide.hide();
-                    }
-                });
+            // 这些页面窗口关闭时只隐藏不销毁，保证菜单再次打开可用。
+            for label in ["settings", "todos", "history", "usage"] {
+                if let Some(window) = app.get_webview_window(label) {
+                    let window_to_hide = window.clone();
+                    window.on_window_event(move |event| {
+                        if let WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = window_to_hide.hide();
+                        }
+                    });
+                }
             }
 
             if let Some(menu_window) = app.get_webview_window("pet-menu") {
@@ -615,6 +602,7 @@ pub fn run() {
             commands::remove_mcp_server,
             commands::set_mcp_server_enabled,
             commands::list_mcp_server_tools,
+            commands::get_usage_stats,
             pet_interaction::set_mouse_passthrough,
             pet_interaction::get_mouse_passthrough,
             native_hit_test::update_pet_hit_test_layout

@@ -16,6 +16,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 - 基于本地 SQLite + Embedding API 的长期记忆（观察者模式，**不依赖** Qdrant/PostgreSQL/Redis/Python 记忆服务；README 与部分旧文档中提到的 Qdrant 方案已被 `docs/local-memory-design.md` 的 Rust + SQLite 方案取代）。
 - MCP 服务器接入（rmcp crate）、编程工具完成提醒（Tool Hook）、只读系统感知（任务栏应用 / 硬件占用 / SMTC 当前播放）、联网搜索工具。
 - 可选开机自启（默认关闭，保存设置后写入或移除当前用户 Windows 启动项）。
+- API 消耗统计（右键菜单「消耗统计」页：ASR 调用次数、LLM 调用次数与输入/输出 token，观察者单独归类）。
 
 **命名说明**：仓库名/产品名/包名已统一为 `RoxyDesktopPet`（npm 包与 Cargo 包名为 `roxydesktoppet`，Tauri identifier 为 `com.roxydesktoppet.desktop`，Rust lib 为 `roxydesktoppet_lib`，二进制名为 `RoxyDesktopPet`）。历史名为 `chatpet`，启动时会自动将旧数据库 `chatpet.db` 迁移为 `roxydesktoppet.db`；更早文档中残留的「ChatPet」均指本项目。
 
@@ -54,9 +55,10 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 │  │  ├─ tool_hook.rs / tool_hook_config.rs / hook_server.rs  # 编程工具（Claude Code/Codex/opencode）完成提醒
 │  │  ├─ system_monitor.rs / media_control.rs  # 只读系统感知（任务栏、硬件、SMTC）
 │  │  ├─ search.rs          # 联网搜索工具
+│  │  ├─ usage.rs           # API 消耗统计埋点（usage_events 表，全局 AppHandle 无侵入记录）
 │  │  ├─ global_input.rs / native_hit_test.rs / pet_interaction.rs / fullscreen_watch.rs  # 桌面交互
 │  │  └─ logger.rs          # log_info!/log_warn!/log_error! 宏（脱敏日志，写入 data/logs/）
-│  ├─ tauri.conf.json       # 5 个窗口定义（pet / pet-menu / settings / todos / history）、CSP、NSIS 打包配置
+│  ├─ tauri.conf.json       # 6 个窗口定义（pet / pet-menu / settings / todos / history / usage）、CSP、NSIS 打包配置
 │  └─ capabilities/default.json  # Tauri 权限
 ├─ docs/                    # 设计文档（见第 8 节）
 ├─ scripts/                 # PowerShell：语音扩展包构建与 GPT-SoVITS 开发环境准备

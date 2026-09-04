@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, HardwareStats, McpServerRequest, McpServerStatus, McpToolInfo, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, VitsModelInfo } from './types';
+import type { AppSettings, HardwareStats, McpServerRequest, McpServerStatus, McpToolInfo, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, UsageSummary, VitsModelInfo } from './types';
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -73,7 +73,14 @@ export async function testVoiceOutput(): Promise<void> { if (inTauri()) await in
 export async function startGptSovits(): Promise<void> { if (inTauri()) await invoke('start_gpt_sovits'); }
 export async function listTodos(): Promise<Todo[]> { return inTauri() ? invoke('list_todos') : []; }
 export async function deleteTodo(id: string): Promise<boolean> { return inTauri() ? invoke('delete_todo', { id }) : true; }
-export async function openAppWindow(label: 'settings' | 'todos' | 'history'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
+export async function openAppWindow(label: 'settings' | 'todos' | 'history' | 'usage'): Promise<void> { if (inTauri()) await invoke('open_app_window', { label }); }
+const demoUsageStats: UsageSummary[] = [
+  { category: 'asr', calls_today: 12, prompt_today: 0, completion_today: 0, calls_total: 340, prompt_total: 0, completion_total: 0 },
+  { category: 'chat', calls_today: 25, prompt_today: 41200, completion_today: 3600, calls_total: 1024, prompt_total: 1830000, completion_total: 152000 },
+  { category: 'agent', calls_today: 3, prompt_today: 18600, completion_today: 900, calls_total: 41, prompt_total: 265000, completion_total: 12400 },
+  { category: 'observer', calls_today: 6, prompt_today: 15800, completion_today: 640, calls_total: 187, prompt_total: 412000, completion_total: 18900 },
+];
+export async function getUsageStats(): Promise<UsageSummary[]> { return inTauri() ? invoke('get_usage_stats') : demoUsageStats; }
 export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
 export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }
 export async function setPetOutfit(outfit: string): Promise<string> { return inTauri() ? invoke('set_pet_outfit', { outfit }) : outfit; }

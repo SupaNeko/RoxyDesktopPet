@@ -610,6 +610,7 @@ async fn send_chat_request(
         .await
         .map_err(|e| format!("观察响应无效：{e}"))?;
     log_info!("memory observer llm response: status={status}\n{}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()));
+    crate::usage::record_chat_response(crate::usage::CAT_OBSERVER, &value).await;
     Ok(value)
 }
 

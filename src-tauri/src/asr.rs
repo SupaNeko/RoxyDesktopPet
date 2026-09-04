@@ -57,6 +57,8 @@ pub async fn transcribe(
     let (socket, _) = connect_async(url.as_str())
         .await
         .map_err(|e| format!("连接讯飞 ASR 失败：{e}"))?;
+    // WebSocket 会话建立即计为一次 ASR 调用。
+    crate::usage::record(crate::usage::CAT_ASR, 0, 0).await;
     let (mut write, mut read) = socket.split();
     let pcm: Vec<u8> = samples.into_iter().flat_map(i16::to_le_bytes).collect();
     let chunks: Vec<&[u8]> = pcm.chunks(1280).collect();

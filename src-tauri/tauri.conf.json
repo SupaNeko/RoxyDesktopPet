@@ -64,6 +64,14 @@
         "height": 680,
         "resizable": true,
         "visible": false
+      },
+      {
+        "label": "usage",
+        "title": "RoxyDesktopPet 消耗统计",
+        "width": 640,
+        "height": 560,
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

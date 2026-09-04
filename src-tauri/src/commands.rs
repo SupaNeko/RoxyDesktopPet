@@ -149,10 +149,26 @@ pub struct RuntimeStatus {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    /// 部分供应商不返回 usage；缺省时仍计 1 次调用、token 记 0。
+    usage: Option<ChatUsage>,
 }
 #[derive(Deserialize)]
 struct Choice {
     message: serde_json::Value,
+}
+#[derive(Deserialize)]
+struct ChatUsage {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+}
+
+impl ChatUsage {
+    fn tokens(&self) -> (i64, i64) {
+        (
+            self.prompt_tokens.unwrap_or(0),
+            self.completion_tokens.unwrap_or(0),
+        )
+    }
 }
 
 fn apply_memory_env(settings: &mut AppSettings, env: &MemoryEnvConfig) {
@@ -735,6 +751,10 @@ async fn request_bilingual_reply(
                 continue;
             }
         };
+        // 每次成功响应都计一次调用（即使后续工具解析失败要重试，这次请求也已计费）。
+        let (prompt_tokens, completion_tokens) =
+            parsed.usage.as_ref().map(|u| u.tokens()).unwrap_or((0, 0));
+        crate::usage::record(crate::usage::CAT_CHAT, prompt_tokens, completion_tokens).await;
         let message = match parsed.choices.first() {
             Some(choice) => &choice.message,
             None => {
@@ -989,6 +1009,9 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
             return Err(format!("工具审计返回 {}", response.status()));
         }
         let parsed: ChatResponse = response.json().await.map_err(|e| e.to_string())?;
+        let (prompt_tokens, completion_tokens) =
+            parsed.usage.as_ref().map(|u| u.tokens()).unwrap_or((0, 0));
+        crate::usage::record(crate::usage::CAT_CHAT, prompt_tokens, completion_tokens).await;
         let message = parsed
             .choices
             .into_iter()
@@ -1314,6 +1337,23 @@ pub async fn list_todos(db_state: State<'_, DbState>) -> Result<Vec<db::Todo>, S
     db::list_pending_todos(&conn).map_err(|e| e.to_string())
 }
 
+/// 消耗统计页查询：按分类返回今日/累计的调用次数与 token 用量。
+#[tauri::command]
+pub async fn get_usage_stats(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<db::UsageSummary>, String> {
+    // 今日起点按本地时区当日 0 点计算，与用户的“今天”直觉一致。
+    let today_start = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|t| t.and_local_timezone(chrono::Local).single())
+        .flatten()
+        .map(|t| t.timestamp_millis())
+        .unwrap_or(0);
+    let conn = db_state.0.lock().await;
+    db::summarize_usage(&conn, today_start).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn delete_todo(db_state: State<'_, DbState>, id: String) -> Result<bool, String> {
     let conn = db_state.0.lock().await;
@@ -1383,7 +1423,7 @@ pub fn show_pet_menu(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_app_window(app: AppHandle, label: String) -> Result<(), String> {
-    if !matches!(label.as_str(), "settings" | "todos" | "history") {
+    if !matches!(label.as_str(), "settings" | "todos" | "history" | "usage") {
         return Err("不允许打开该窗口".into());
     }
     let window = app

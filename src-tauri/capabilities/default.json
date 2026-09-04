@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default RoxyDesktopPet window permissions",
-  "windows": ["pet", "pet-menu", "settings", "todos", "history"],
+  "windows": ["pet", "pet-menu", "settings", "todos", "history", "usage"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

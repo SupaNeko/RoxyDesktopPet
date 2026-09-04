@@ -3,9 +3,9 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
-  import { History, ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Shirt, Trash2, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMainSessionHistory, listMessages, saveSettings, sendMessage, setPetOutfit, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools } from './lib/api';
-  import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, VoiceStatus } from './lib/types';
+  import { BarChart3, History, ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Shirt, Trash2, X } from 'lucide-svelte';
+  import { getRuntimeStatus, getSettings, listMainSessionHistory, listMessages, saveSettings, sendMessage, setPetOutfit, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools, getUsageStats } from './lib/api';
+  import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, UsageSummary, VoiceStatus } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
   let settings = $state<AppSettings>({ pet_name: 'RoxyDesktopPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default', search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30, autostart_enabled: false });
@@ -64,6 +64,21 @@
       if (initial) { await tick(); window.scrollTo(0, document.documentElement.scrollHeight); }
     } catch (e) { error = String(e); } finally { historyLoading = false; }
   }
+  // 消耗统计页状态：语音转文字（按次计费）与 LLM token 消耗分开展示。
+  let usageStats = $state<UsageSummary[]>([]);
+  let usageLoading = $state(false);
+  const USAGE_CATEGORY_LABELS: Record<string, string> = { chat: 'AI 对话', agent: '代理任务', observer: '观察者' };
+  const USAGE_CATEGORY_ORDER = ['chat', 'agent', 'observer'];
+  async function loadUsageStats() {
+    if (usageLoading) return;
+    usageLoading = true; error = '';
+    try { usageStats = await getUsageStats(); } catch (e) { error = String(e); } finally { usageLoading = false; }
+  }
+  // 合计行：仅合计有 token 概念的 LLM 分类；语音转文字按次单独展示。
+  const usageRows = $derived(USAGE_CATEGORY_ORDER.map((category) => usageStats.find((s) => s.category === category) ?? { category, calls_today: 0, prompt_today: 0, completion_today: 0, calls_total: 0, prompt_total: 0, completion_total: 0 }));
+  const usageTotal = $derived(usageRows.reduce((acc, s) => ({ calls_today: acc.calls_today + s.calls_today, prompt_today: acc.prompt_today + s.prompt_today, completion_today: acc.completion_today + s.completion_today, calls_total: acc.calls_total + s.calls_total, prompt_total: acc.prompt_total + s.prompt_total, completion_total: acc.completion_total + s.completion_total }), { calls_today: 0, prompt_today: 0, completion_today: 0, calls_total: 0, prompt_total: 0, completion_total: 0 }));
+  const asrStats = $derived(usageStats.find((s) => s.category === 'asr') ?? null);
+  const formatTokens = (n: number) => n.toLocaleString('zh-CN');
   const sameDay = (a: number, b: number) => { const da = new Date(a), db = new Date(b); return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate(); };
   // AI 主动发起的消息在历史页上的来源标签（trigger_type → 中文标签）。
   const TRIGGER_LABELS: Record<string, string> = { reminder_due: '提醒', companion_tick: '主动搭话', tool_hook: '工具提醒', agent_followup: '任务转告' };
@@ -203,9 +218,10 @@
     }
     const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<Todo>('todo-created', (event) => { todoNotice = event.payload; if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); todoNoticeTimer = window.setTimeout(() => { todoNotice = null; todoNoticeTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000); schedulePetHitTestLayout(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen<string>('pet-outfit-changed', (event) => { settings.pet_outfit=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); if (label === 'history') { historyExhausted = false; loadHistoryPage(true); } }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<Todo>('todo-created', (event) => { todoNotice = event.payload; if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); todoNoticeTimer = window.setTimeout(() => { todoNotice = null; todoNoticeTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000); schedulePetHitTestLayout(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen<string>('pet-outfit-changed', (event) => { settings.pet_outfit=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); if (label === 'history') { historyExhausted = false; loadHistoryPage(true); } if (label === 'usage') loadUsageStats(); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
     if (label === 'history') loadHistoryPage(true);
+    if (label === 'usage') loadUsageStats();
     if (label === 'settings') loadToolHookSupport();
     return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); menuResizeObserver?.disconnect(); };
   });
@@ -258,7 +274,7 @@
   }
   async function closeMenu() { if (label === 'pet-menu') await getCurrentWindow().hide(); }
   async function enablePassthroughFromMenu() { await changeMousePassthrough(true); await closeMenu(); }
-  async function openWindow(label: 'settings'|'todos'|'history') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
+  async function openWindow(label: 'settings'|'todos'|'history'|'usage') { try { await openAppWindow(label); await closeMenu(); } catch(e) { error=String(e); } }
   const formatDue = (timestamp: number) => new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(timestamp));
   const formatRepeat = (minutes: number) => minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
   async function removeTodo(id: string) {
@@ -306,6 +322,7 @@
       <button onclick={()=>openWindow('settings')}><Settings size={15}/><span>打开设置</span></button>
       <button onclick={()=>openWindow('todos')}><ListTodo size={15}/><span>查看待办</span></button>
       <button onclick={()=>openWindow('history')}><History size={15}/><span>历史会话</span></button>
+      <button onclick={()=>openWindow('usage')}><BarChart3 size={15}/><span>消耗统计</span></button>
     </div>
   </main>
 {:else if label === 'settings'}
@@ -569,6 +586,41 @@
       {#if historyLoading && historyMessages.length > 0}<p class="history-hint">加载中…</p>{/if}
     </div>
   </main>
+{:else if label === 'usage'}
+  <main class="usage-page">
+    <header><span>ROXYDESKTOPPET</span><h1>消耗统计</h1><small>API 调用次数与 token 用量</small></header>
+    {#if error}<p class="error">{error}</p>{/if}
+    <p class="usage-asr">语音转文字（按次计费）：今日 {formatTokens(asrStats?.calls_today ?? 0)} 次 · 累计 {formatTokens(asrStats?.calls_total ?? 0)} 次</p>
+    <table class="usage-table">
+      <thead>
+        <tr><th rowspan="2">分类</th><th colspan="3">今日</th><th colspan="3">累计</th></tr>
+        <tr><th>次数</th><th>输入</th><th>输出</th><th>次数</th><th>输入</th><th>输出</th></tr>
+      </thead>
+      <tbody>
+        {#each usageRows as row (row.category)}
+          <tr>
+            <td>{USAGE_CATEGORY_LABELS[row.category] ?? row.category}</td>
+            <td>{formatTokens(row.calls_today)}</td>
+            <td>{formatTokens(row.prompt_today)}</td>
+            <td>{formatTokens(row.completion_today)}</td>
+            <td>{formatTokens(row.calls_total)}</td>
+            <td>{formatTokens(row.prompt_total)}</td>
+            <td>{formatTokens(row.completion_total)}</td>
+          </tr>
+        {/each}
+        <tr class="usage-total">
+          <td>合计</td>
+          <td>{formatTokens(usageTotal.calls_today)}</td>
+          <td>{formatTokens(usageTotal.prompt_today)}</td>
+          <td>{formatTokens(usageTotal.completion_today)}</td>
+          <td>{formatTokens(usageTotal.calls_total)}</td>
+          <td>{formatTokens(usageTotal.prompt_total)}</td>
+          <td>{formatTokens(usageTotal.completion_total)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">输入/输出为 token 数；语音转文字按调用次数单独统计。Embedding、语音合成与联网搜索不在统计范围内。</p>
+  </main>
 {:else}
   <main class="pet-window" data-tauri-drag-region>
     {#if todoNotice}
@@ -684,6 +736,18 @@
   .history-bubble time { display:block; margin-top:3px; color:#a3968a; font-size:10px; text-align:right; }
   .history-row.user .history-bubble time { color:rgba(255,255,255,.72); }
   .history-hint { justify-self:center; margin:4px 0 0; color:#81766b; font-size:11px; }
+  .usage-page { min-height:100vh; padding:27px 30px; color:#39332d; background:#f5f0e8; }
+  .usage-page header { position:relative; margin-bottom:20px; }
+  .usage-page header>span { color:#a05f43; font-size:10px; font-weight:700; letter-spacing:.18em; }
+  .usage-page h1 { margin:3px 0 0; font:600 26px Georgia,"Microsoft YaHei UI",serif; }
+  .usage-page header small { position:absolute; right:0; bottom:4px; color:#81766b; }
+  .usage-table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
+  .usage-table th, .usage-table td { padding:7px 8px; border-bottom:1px solid #e4d9ca; text-align:right; }
+  .usage-table th:first-child, .usage-table td:first-child { text-align:left; }
+  .usage-table thead th { color:#81766b; font-size:11px; font-weight:600; }
+  .usage-table tbody tr.usage-total td { border-top:2px solid #cfc0ae; border-bottom:0; color:#5e4a3c; font-weight:700; }
+  .usage-asr { margin:0 0 14px; padding:10px 13px; border:1px solid #ded2c4; border-radius:12px; background:#fffaf3; font-size:12px; font-variant-numeric:tabular-nums; }
+  .usage-page .note { margin-top:14px; }
   .bubble-close { position:absolute; top:6px; right:8px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; color:#9a8c7d; background:transparent; cursor:pointer; }
   .bubble-close:hover { color:#5e4a3c; background:#f0e6da; }
   .range-value { justify-self: end; margin-top: -20px; color: #9b6047; font-variant-numeric: tabular-nums; }
