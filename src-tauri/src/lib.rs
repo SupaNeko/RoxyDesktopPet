@@ -39,17 +39,27 @@ use tokio::sync::Mutex;
 pub struct ConversationState(pub Mutex<()>);
 
 /// 将数据库中的自启配置同步到 Windows 当前用户启动项。
-/// 开启时总是重写启动项，确保应用重装或路径变化后仍指向当前 exe。
 pub(crate) fn sync_autostart_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
 
     let autostart = app.autolaunch();
-    let result = if enabled {
-        autostart.enable()
-    } else {
-        autostart.disable()
-    };
-    result.map_err(|error| format!("更新开机自启设置失败：{error}"))
+    if enabled {
+        // 开启时总是重写启动项，确保应用重装或路径变化后仍指向当前 exe。
+        return autostart
+            .enable()
+            .map_err(|error| format!("更新开机自启设置失败：{error}"));
+    }
+    // 关闭时先确认启动项存在再删除：auto-launch 的 disable() 在注册表值缺失时
+    // 会报「系统找不到指定的文件 (os error 2)」，启动项本就不存在属于正常情况。
+    let current = autostart
+        .is_enabled()
+        .map_err(|error| format!("读取开机自启状态失败：{error}"))?;
+    if !current {
+        return Ok(());
+    }
+    autostart
+        .disable()
+        .map_err(|error| format!("更新开机自启设置失败：{error}"))
 }
 
 pub struct ModelConfig {
