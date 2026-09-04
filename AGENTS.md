@@ -15,6 +15,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 - 可选 GPT-SoVITS v2ProPlus 本地日语语音输出（独立扩展包，需 NVIDIA GPU，不在安装包内）。
 - 基于本地 SQLite + Embedding API 的长期记忆（观察者模式，**不依赖** Qdrant/PostgreSQL/Redis/Python 记忆服务；README 与部分旧文档中提到的 Qdrant 方案已被 `docs/local-memory-design.md` 的 Rust + SQLite 方案取代）。
 - MCP 服务器接入（rmcp crate）、编程工具完成提醒（Tool Hook）、只读系统感知（任务栏应用 / 硬件占用 / SMTC 当前播放）、联网搜索工具。
+- 可选开机自启（默认关闭，保存设置后写入或移除当前用户 Windows 启动项）。
 
 **命名说明**：仓库名/产品名/包名已统一为 `RoxyDesktopPet`（npm 包与 Cargo 包名为 `roxydesktoppet`，Tauri identifier 为 `com.roxydesktoppet.desktop`，Rust lib 为 `roxydesktoppet_lib`，二进制名为 `RoxyDesktopPet`）。历史名为 `chatpet`，启动时会自动将旧数据库 `chatpet.db` 迁移为 `roxydesktoppet.db`；更早文档中残留的「ChatPet」均指本项目。
 
@@ -28,7 +29,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 | 数据 | SQLite（rusqlite bundled），单文件 `data/roxydesktoppet.db` |
 | 音频 | cpal（采集）、rodio（播放）、voice_activity_detector（VAD）、tokio-tungstenite（讯飞 ASR WebSocket） |
 | 网络 | reqwest（LLM/Embedding/TTS）、rmcp（MCP 客户端，stdio + Streamable HTTP） |
-| Windows 集成 | windows-sys / windows crate（托盘、全局输入钩子、命中测试、SMTC、DWM）、sysinfo（硬件占用） |
+| Windows 集成 | windows-sys / windows crate（托盘、全局输入钩子、命中测试、SMTC、DWM）、sysinfo（硬件占用）、tauri-plugin-autostart（开机自启） |
 
 ## 3. 目录结构与模块划分
 

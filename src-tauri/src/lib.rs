@@ -38,6 +38,20 @@ use tokio::sync::Mutex;
 
 pub struct ConversationState(pub Mutex<()>);
 
+/// 将数据库中的自启配置同步到 Windows 当前用户启动项。
+/// 开启时总是重写启动项，确保应用重装或路径变化后仍指向当前 exe。
+pub(crate) fn sync_autostart_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let autostart = app.autolaunch();
+    let result = if enabled {
+        autostart.enable()
+    } else {
+        autostart.disable()
+    };
+    result.map_err(|error| format!("更新开机自启设置失败：{error}"))
+}
+
 pub struct ModelConfig {
     pub api_key: String,
     pub base_url: String,
@@ -264,6 +278,7 @@ pub fn run() {
     let mcp_servers = db::list_mcp_servers(&db).unwrap_or_default();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().app_name("RoxyDesktopPet").build())
         // Command state must exist before setup because configured webviews can load
         // and invoke commands while the setup callback is still running.
         .manage(db::DbState(Mutex::new(db)))
@@ -366,6 +381,25 @@ pub fn run() {
             let hook_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tool_hook::reconcile_server(&hook_app).await;
+            });
+
+            // 校正开机自启注册表与数据库配置，覆盖手动删项、重装路径变化等漂移。
+            let autostart_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let enabled = {
+                    let db_state = autostart_app.state::<db::DbState>();
+                    let conn = db_state.0.lock().await;
+                    match db::get_settings(&conn, true) {
+                        Ok(settings) => settings.autostart_enabled,
+                        Err(error) => {
+                            log_warn!("读取开机自启设置失败：{error}");
+                            return;
+                        }
+                    }
+                };
+                if let Err(error) = sync_autostart_enabled(&autostart_app, enabled) {
+                    log_warn!("{error}");
+                }
             });
 
             // 启动时拉起已启用的 MCP 服务器（stdio 子进程 + 远程连接）。

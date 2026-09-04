@@ -122,6 +122,8 @@ pub struct SaveSettingsRequest {
     pub search_base_url: String,
     #[serde(default = "default_agent_max_tool_rounds")]
     pub agent_max_tool_rounds: u32,
+    #[serde(default)]
+    pub autostart_enabled: bool,
 }
 
 fn default_agent_max_tool_rounds() -> u32 {
@@ -405,6 +407,7 @@ pub async fn save_settings(
             .to_string(),
         search_api_configured: false,
         agent_max_tool_rounds: request.agent_max_tool_rounds.clamp(1, 100),
+        autostart_enabled: request.autostart_enabled,
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());
@@ -422,6 +425,10 @@ pub async fn save_settings(
             .map_err(|e| e.to_string())?;
     }
     drop(conn);
+    if let Err(error) = crate::sync_autostart_enabled(&app, settings.autostart_enabled) {
+        log_warn!("{error}");
+        return Err(error);
+    }
     if previous_proactive.0 != settings.proactive_enabled {
         let _ = app.emit("proactive-enabled-changed", settings.proactive_enabled);
     }

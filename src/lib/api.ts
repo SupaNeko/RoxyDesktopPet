@@ -26,7 +26,8 @@ const demoSettings: AppSettings = {
   system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false,
   voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default',
   search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false,
-  agent_max_tool_rounds: 30
+  agent_max_tool_rounds: 30,
+  autostart_enabled: false
 };
 
 export async function getSettings(): Promise<AppSettings> {

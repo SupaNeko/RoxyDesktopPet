@@ -59,6 +59,7 @@ export interface AppSettings {
   search_base_url: string;
   search_api_configured: boolean;
   agent_max_tool_rounds: number;
+  autostart_enabled: boolean;
 }
 
 export interface Message {
