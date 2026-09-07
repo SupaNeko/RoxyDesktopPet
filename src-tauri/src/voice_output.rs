@@ -247,8 +247,10 @@ pub fn scan_models(data_dir: &Path) -> Result<Vec<VitsModelInfo>, String> {
 pub fn schedule(app: AppHandle, message: Message) {
     let trigger = message.trigger_type.clone();
     let emotion = message.emotion.clone();
+    // 打断：新语音到来时停掉尚未播完的旧语音，并作废旧播放任务。
+    let epoch = interrupt_playback();
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = generate_and_play(&app, &message).await {
+        if let Err(error) = generate_and_play(&app, &message, epoch).await {
             log_error!("voice output failed (trigger={trigger}, emotion={:?}): {error}", emotion);
             let _ = app.emit("voice-output-error", error);
         }
@@ -264,11 +266,54 @@ pub async fn test(app: &AppHandle) -> Result<(), String> {
         emotion: Some("calm".into()),
         trigger_type: "voice_test".into(),
         created_at: chrono::Utc::now().timestamp_millis(),
+        session: "main".into(),
+        quiz: None,
     };
-    generate_and_play(app, &message).await
+    let epoch = interrupt_playback();
+    generate_and_play(app, &message, epoch).await
 }
 
-async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), String> {
+// ---- 播放打断：epoch 递增作废旧任务，CURRENT_SINK 注册当前播放器供新任务停止 ----
+static PLAY_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CURRENT_SINK: std::sync::Mutex<Option<(u64, std::sync::Arc<rodio::Sink>)>> = std::sync::Mutex::new(None);
+
+/// 递增播放纪元并停止当前正在播放的语音，返回新纪元。
+fn interrupt_playback() -> u64 {
+    let epoch = PLAY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if let Ok(mut guard) = CURRENT_SINK.lock() {
+        if let Some((_, sink)) = guard.take() {
+            sink.stop();
+        }
+    }
+    epoch
+}
+
+/// 当前任务是否已被更新的语音打断。
+fn playback_stale(epoch: u64) -> bool {
+    PLAY_EPOCH.load(std::sync::atomic::Ordering::SeqCst) != epoch
+}
+
+/// 注册当前 sink（供后续打断）；纪元已过期则不注册并返回 false（调用方应停止播放）。
+fn register_sink(epoch: u64, sink: &std::sync::Arc<rodio::Sink>) -> bool {
+    if playback_stale(epoch) {
+        return false;
+    }
+    if let Ok(mut guard) = CURRENT_SINK.lock() {
+        *guard = Some((epoch, sink.clone()));
+    }
+    true
+}
+
+/// 播放自然结束时注销（只在自己仍是当前播放器时）。
+fn unregister_sink(epoch: u64) {
+    if let Ok(mut guard) = CURRENT_SINK.lock() {
+        if guard.as_ref().is_some_and(|(current, _)| *current == epoch) {
+            *guard = None;
+        }
+    }
+}
+
+async fn generate_and_play(app: &AppHandle, message: &Message, epoch: u64) -> Result<(), String> {
     let state = app.state::<VoiceOutputState>();
     let _guard = state.pipeline.lock().await;
     let db = app.state::<DbState>();
@@ -295,7 +340,7 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
     std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     if settings.voice_output_mode == "gpt_sovits" {
         // 流式合成：边下边播，函数内部完成播放与缓存落盘
-        return gpt_sovits_tts(app, message, &cache.join(format!("{}.wav", message.id))).await;
+        return gpt_sovits_tts(app, message, &cache.join(format!("{}.wav", message.id)), epoch).await;
     }
     let path = if settings.voice_output_mode == "api" {
         api_tts(&settings, &message.content, &cache.join(&message.id)).await?
@@ -331,7 +376,11 @@ async fn generate_and_play(app: &AppHandle, message: &Message) -> Result<(), Str
     } else {
         return Ok(());
     };
-    play(path).await
+    // 合成完成后若已被新语音打断，直接丢弃不播。
+    if playback_stale(epoch) {
+        return Ok(());
+    }
+    play(path, epoch).await
 }
 
 /// GPT-SoVITS 流式合成：边合成边播放，结束后落盘缓存。
@@ -342,6 +391,7 @@ async fn gpt_sovits_tts(
     app: &AppHandle,
     message: &Message,
     output: &Path,
+    epoch: u64,
 ) -> Result<(), String> {
     let text = message
         .japanese_text
@@ -392,11 +442,17 @@ async fn gpt_sovits_tts(
 
     // 播放线程消费字节流；本任务同时收集完整字节用于缓存。
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let player = tokio::task::spawn_blocking(move || play_pcm_stream(rx));
+    let player = tokio::task::spawn_blocking(move || play_pcm_stream(rx, epoch));
     let mut bytes = Vec::new();
+    let mut aborted = false;
     let mut stream_error: Option<String> = None;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        // 被新语音打断：停止下载与播放，不落缓存。
+        if playback_stale(epoch) {
+            aborted = true;
+            break;
+        }
         match chunk {
             Ok(chunk) => {
                 if tx.send(chunk.to_vec()).is_err() {
@@ -414,6 +470,10 @@ async fn gpt_sovits_tts(
     drop(tx);
     // 播放线程在通道关闭后播完剩余缓冲再退出
     player.await.map_err(|e| e.to_string())??;
+    if aborted || playback_stale(epoch) {
+        log_info!("gpt_sovits_tts: 播放被新语音打断，丢弃本次合成");
+        return Ok(());
+    }
     if let Some(error) = stream_error {
         return Err(error);
     }
@@ -429,15 +489,22 @@ async fn gpt_sovits_tts(
 /// 消费 GPT-SoVITS 流式 WAV 字节流并实时播放（在阻塞线程中运行）。
 /// 先解析 WAV 头拿采样率/声道，之后的裸 PCM 累积到预缓冲量才开始播，
 /// 降低合成速度波动导致的断流卡顿。
-fn play_pcm_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>) -> Result<(), String> {
+fn play_pcm_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>, epoch: u64) -> Result<(), String> {
     const PREBUFFER_MS: usize = 700;
     let mut header_buf: Vec<u8> = Vec::new();
     let mut format: Option<(u32, u16)> = None; // (采样率, 声道数)
     let mut prebuffer_bytes = 0usize;
     let mut pending_pcm: Vec<u8> = Vec::new();
-    let mut output: Option<(rodio::OutputStream, rodio::Sink)> = None;
+    let mut output: Option<(rodio::OutputStream, std::sync::Arc<rodio::Sink>)> = None;
 
     for chunk in rx.iter() {
+        // 被新语音打断：立即停止播放并退出。
+        if playback_stale(epoch) {
+            if let Some((_, sink)) = &output {
+                sink.stop();
+            }
+            return Ok(());
+        }
         if format.is_none() {
             header_buf.extend_from_slice(&chunk);
             match parse_wav_stream_header(&header_buf) {
@@ -460,7 +527,11 @@ fn play_pcm_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>) -> Result<(), String>
         }
         let (sample_rate, channels) = format.expect("格式已解析");
         if output.is_none() && pending_pcm.len() >= prebuffer_bytes.max(1) {
-            output = Some(create_stream_output()?);
+            let stream_output = create_stream_output()?;
+            if !register_sink(epoch, &stream_output.1) {
+                return Ok(()); // 注册前已被打断
+            }
+            output = Some(stream_output);
         }
         if let Some((_, sink)) = &output {
             flush_pcm(sink, &mut pending_pcm, sample_rate, channels);
@@ -470,20 +541,32 @@ fn play_pcm_stream(rx: std::sync::mpsc::Receiver<Vec<u8>>) -> Result<(), String>
     // 通道关闭（合成结束）：音频太短不足预缓冲量也要播
     let (sample_rate, channels) = format.ok_or("GPT-SoVITS 未返回音频数据")?;
     if output.is_none() {
-        output = Some(create_stream_output()?);
+        let stream_output = create_stream_output()?;
+        if !register_sink(epoch, &stream_output.1) {
+            return Ok(());
+        }
+        output = Some(stream_output);
     }
     if let Some((_, sink)) = &output {
         flush_pcm(sink, &mut pending_pcm, sample_rate, channels);
-        sink.sleep_until_end();
+        // 等待播完，期间响应打断。
+        while !sink.empty() {
+            if playback_stale(epoch) {
+                sink.stop();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
+    unregister_sink(epoch);
     Ok(())
 }
 
-fn create_stream_output() -> Result<(rodio::OutputStream, rodio::Sink), String> {
+fn create_stream_output() -> Result<(rodio::OutputStream, std::sync::Arc<rodio::Sink>), String> {
     let (stream, handle) =
         rodio::OutputStream::try_default().map_err(|e| format!("打开音频输出失败：{e}"))?;
     let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
-    Ok((stream, sink))
+    Ok((stream, std::sync::Arc::new(sink)))
 }
 
 /// 把 pending 中完整的 int16 样本推入 sink；保留末尾可能残缺的单个字节。
@@ -733,17 +816,28 @@ async fn translate(app: &AppHandle, settings: &AppSettings, text: &str) -> Resul
         .ok_or("翻译结果为空".into())
 }
 
-async fn play(path: PathBuf) -> Result<(), String> {
+async fn play(path: PathBuf, epoch: u64) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let (_stream, handle) =
             rodio::OutputStream::try_default().map_err(|e| format!("打开音频输出失败：{e}"))?;
-        let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
+        let sink = std::sync::Arc::new(rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?);
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         sink.append(
             rodio::Decoder::new(StdBufReader::new(file))
                 .map_err(|e| format!("音频解码失败：{e}"))?,
         );
-        sink.sleep_until_end();
+        if !register_sink(epoch, &sink) {
+            return Ok(()); // 开始前已被打断
+        }
+        // 等待播完，期间响应打断。
+        while !sink.empty() {
+            if playback_stale(epoch) {
+                sink.stop();
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        unregister_sink(epoch);
         Ok(())
     })
     .await

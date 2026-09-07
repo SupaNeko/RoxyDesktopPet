@@ -124,6 +124,55 @@ pub struct SaveSettingsRequest {
     pub agent_max_tool_rounds: u32,
     #[serde(default)]
     pub autostart_enabled: bool,
+    /// 日语学习模式总开关（默认关闭）。
+    #[serde(default)]
+    pub study_enabled: bool,
+    /// 学习会话与主会话隔离（默认开启）。
+    #[serde(default = "default_study_isolated")]
+    pub study_isolated: bool,
+    #[serde(default = "default_study_review_enabled")]
+    pub study_review_enabled: bool,
+    #[serde(default = "default_study_review_min_minutes")]
+    pub study_review_min_minutes: i64,
+    #[serde(default = "default_study_review_max_minutes")]
+    pub study_review_max_minutes: i64,
+    #[serde(default = "default_study_review_daily_limit")]
+    pub study_review_daily_limit: i64,
+    /// 启用的题型（逗号分隔，缺省全部）。
+    #[serde(default = "default_study_quiz_types")]
+    pub study_quiz_types: String,
+    /// 持续出题模式（默认关闭）。
+    #[serde(default)]
+    pub study_continuous_enabled: bool,
+    /// 答题气泡显示时间（秒，默认 60）。
+    #[serde(default = "default_study_quiz_ttl_seconds")]
+    pub study_quiz_ttl_seconds: i64,
+}
+
+fn default_study_isolated() -> bool {
+    true
+}
+
+fn default_study_review_enabled() -> bool {
+    true
+}
+
+fn default_study_review_min_minutes() -> i64 {
+    30
+}
+
+fn default_study_review_max_minutes() -> i64 {
+    90
+}
+
+fn default_study_review_daily_limit() -> i64 {
+    8
+}
+fn default_study_quiz_types() -> String {
+    "meaning,spelling,reading".into()
+}
+fn default_study_quiz_ttl_seconds() -> i64 {
+    60
 }
 
 fn default_agent_max_tool_rounds() -> u32 {
@@ -288,6 +337,13 @@ pub async fn save_settings(
         existing.proactive_max_minutes,
         existing.proactive_daily_limit,
     );
+    let previous_study = (
+        existing.study_enabled,
+        existing.study_review_enabled,
+        existing.study_review_min_minutes,
+        existing.study_review_max_minutes,
+        existing.study_review_daily_limit,
+    );
     let asr_app_id = if request.asr_app_id.trim().is_empty() {
         existing.asr_app_id
     } else {
@@ -424,9 +480,23 @@ pub async fn save_settings(
         search_api_configured: false,
         agent_max_tool_rounds: request.agent_max_tool_rounds.clamp(1, 100),
         autostart_enabled: request.autostart_enabled,
+        study_enabled: request.study_enabled,
+        study_isolated: request.study_isolated,
+        study_review_enabled: request.study_review_enabled,
+        study_review_min_minutes: request.study_review_min_minutes.clamp(1, 10_080),
+        study_review_max_minutes: request.study_review_max_minutes.clamp(1, 10_080),
+        study_review_daily_limit: request.study_review_daily_limit.clamp(1, 50),
+        // 题型配置规范化：非法值剔除，全不合法时回退全部题型。
+        study_quiz_types: crate::study::normalize_quiz_types(&request.study_quiz_types),
+        study_continuous_enabled: request.study_continuous_enabled,
+        study_quiz_ttl_seconds: request.study_quiz_ttl_seconds.clamp(5, 3600),
     };
     if settings.proactive_min_minutes > settings.proactive_max_minutes {
         return Err("主动消息最短间隔不能大于最长间隔".into());
+    }
+    // 复习区间 min > max 时把 max 抬到 min（宽容 clamp，不阻断保存）。
+    if settings.study_review_min_minutes > settings.study_review_max_minutes {
+        settings.study_review_max_minutes = settings.study_review_min_minutes;
     }
     let conn = db_state.0.lock().await;
     db::save_settings(&conn, &settings).map_err(|e| e.to_string())?;
@@ -438,6 +508,18 @@ pub async fn save_settings(
     );
     if previous_proactive != current_proactive {
         db::reset_proactive_schedule(&conn, &settings, chrono::Utc::now().timestamp_millis())
+            .map_err(|e| e.to_string())?;
+    }
+    // 学习模式/复习相关配置变化时重排复习计划（关闭时会清空计划）。
+    let current_study = (
+        settings.study_enabled,
+        settings.study_review_enabled,
+        settings.study_review_min_minutes,
+        settings.study_review_max_minutes,
+        settings.study_review_daily_limit,
+    );
+    if previous_study != current_study {
+        db::reset_study_schedule(&conn, &settings, chrono::Utc::now().timestamp_millis())
             .map_err(|e| e.to_string())?;
     }
     drop(conn);
@@ -586,6 +668,9 @@ struct BilingualReply {
     /// 需要反馈结果的复杂任务：委派给后台代理执行的任务描述。
     #[serde(default)]
     follow_up_task: Option<String>,
+    /// 日语学习模式下的可选选择题（学习模式关闭时会被剥离）。
+    #[serde(default)]
+    quiz: Option<crate::study::QuizPayload>,
 }
 
 fn day_period_label(hour: u32) -> &'static str {
@@ -683,7 +768,8 @@ async fn request_bilingual_reply(
                     "chinese_text": {"type":"string","description":"显示给用户的中文回复"},
                     "japanese_text": {"type":"string","description":"与中文含义相同、符合洛琪希口吻的自然日文回复"},
                     "emotion": {"type":"string","enum":["shy","affectionate","sad","happy","calm","angry","battle","self_deprecating"]},
-                    "follow_up_task": {"type":"string","description":"仅当用户需求复杂、需要后台代理调用工具执行并把结果反馈给用户时，填写要委派的任务描述；其他情况不要填写"}
+                    "follow_up_task": {"type":"string","description":"仅当用户需求复杂、需要后台代理调用工具执行并把结果反馈给用户时，填写要委派的任务描述；其他情况不要填写"},
+                    "quiz": {"type":"object","description":"仅在系统提示的【日语学习模式】要求出题时填写一道选择题；其他情况不要填写","properties":{"question":{"type":"string","description":"题干"},"options":{"type":"array","items":{"type":"string"},"minItems":3,"maxItems":3,"description":"恰好 3 个选项"},"correct_index":{"type":"integer","description":"正确选项下标，从 0 开始"},"quiz_type":{"type":"string","enum":["meaning","spelling","reading"]},"word_id":{"type":"string","description":"目标单词 id，取自学习上下文单词清单的 id 列"}},"required":["question","options","correct_index","quiz_type","word_id"],"additionalProperties":false}
                 },
                 "required": ["chinese_text", "japanese_text", "emotion"],
                 "additionalProperties": false
@@ -831,6 +917,15 @@ fn normalize_emotion(value: &str) -> String {
     .to_string()
 }
 
+/// 主循环读写的会话标识：学习模式 + 隔离开启时走独立学习会话，否则归入主会话。
+pub(crate) fn study_session(settings: &AppSettings) -> &'static str {
+    if settings.study_enabled && settings.study_isolated {
+        "study"
+    } else {
+        "main"
+    }
+}
+
 async fn process_message(
     app: &AppHandle,
     db_state: &DbState,
@@ -850,22 +945,30 @@ async fn process_message(
         trigger_type,
         content.chars().count()
     );
-    let user = Message {
-        id: uuid::Uuid::new_v4().to_string(),
-        role: "user".into(),
-        content: content.clone(),
-        japanese_text: None,
-        emotion: None,
-        trigger_type: trigger_type.into(),
-        created_at: chrono::Utc::now().timestamp_millis(),
-    };
-    let (mut settings, history, preference_context) = {
+    let (mut settings, user, history, preference_context, study_context) = {
         let conn = db_state.0.lock().await;
+        let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+        let session = study_session(&settings);
+        let user = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: "user".into(),
+            content: content.clone(),
+            japanese_text: None,
+            emotion: None,
+            trigger_type: trigger_type.into(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+            session: session.into(),
+            quiz: None,
+        };
         db::insert_message(&conn, &user).map_err(|e| e.to_string())?;
+        // 学习模式开启时注入单词组上下文；关闭时为空白段。
+        let study_context = crate::study::build_study_context(&conn, &settings);
         (
-            db::get_settings(&conn, true).map_err(|e| e.to_string())?,
-            db::list_messages(&conn, 30).map_err(|e| e.to_string())?,
+            settings,
+            user,
+            db::list_messages_by_session(&conn, session, 30).map_err(|e| e.to_string())?,
             user_preference_context(&conn),
+            study_context,
         )
     };
     apply_memory_env(&mut settings, memory_env);
@@ -908,9 +1011,15 @@ async fn process_message(
         db::list_recent_agent_runs(&conn, 3).unwrap_or_default()
     };
     let mcp_context = build_mcp_context(&mcp_tools, &agent_runs, search_available);
+    // 学习上下文非空时同时注入出题约定（只包含用户启用的题型）。
+    let study_instructions = if study_context.is_empty() {
+        String::new()
+    } else {
+        crate::study::quiz_instructions(&settings)
+    };
     let mut messages = vec![serde_json::json!({"role":"system","content":format!(
-        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}\n用户偏好（长期观察总结，始终生效，请自然遵循，不要刻意复述）：\n{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
-        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, preference_context, system_context, mcp_context
+        "你是洛琪希桌宠。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n相关长期记忆：\n{}\n用户偏好（长期观察总结，始终生效，请自然遵循，不要刻意复述）：\n{}{}{}{}{}\n一次性生成含义完全相同的中文和日文回复。角色口吻以自然日语为准，再给出忠实中文。必须调用 reply_to_user 工具完成回复，不要输出普通文本或分析。",
+        ROXY_PERSONA, local_time_description(), NATURAL_SPEECH_RULES, memory_context, preference_context, system_context, mcp_context, study_context, study_instructions
     )})];
     messages.extend(history_to_json(history));
     let client = reqwest::Client::new();
@@ -919,6 +1028,58 @@ async fn process_message(
         "process_message llm done: reply_len={}",
         reply.chinese_text.chars().count()
     );
+    // 选择题处理：学习模式开启时校验并落库（出题即记录，重启后仍可答）；关闭时剥离模型返回的 quiz。
+    let quiz_view = if settings.study_enabled {
+        match reply.quiz.as_ref() {
+            Some(quiz) => {
+                let conn = db_state.0.lock().await;
+                let words = db::enabled_group_words(&conn).unwrap_or_default();
+                let allowed_types = crate::study::enabled_quiz_types(&settings);
+                match crate::study::validate_quiz(quiz, &words, &allowed_types) {
+                    Ok(validated) => {
+                        let quiz_id = uuid::Uuid::new_v4().to_string();
+                        let record = db::QuizRecord {
+                            id: quiz_id.clone(),
+                            word_id: validated.word_id,
+                            group_id: validated.word.group_id.clone(),
+                            quiz_type: validated.quiz_type.clone(),
+                            question: validated.question.clone(),
+                            options: validated.options.clone(),
+                            correct_index: validated.correct_index as i64,
+                            selected_index: None,
+                            is_correct: None,
+                            source: "chat".into(),
+                            created_at: chrono::Utc::now().timestamp_millis(),
+                            answered_at: None,
+                            word: validated.word.word.clone(),
+                            kana: validated.word.kana.clone(),
+                            meaning: validated.word.meaning.clone(),
+                        };
+                        if let Err(error) = db::insert_quiz_record(&conn, &record) {
+                            log_error!("选择题落库失败：{error}");
+                            None
+                        } else {
+                            Some(db::QuizView {
+                                quiz_id,
+                                question: validated.question,
+                                options: validated.options,
+                            })
+                        }
+                    }
+                    Err(error) => {
+                        log_warn!("模型产出的选择题未通过校验，已忽略：{error}");
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    } else {
+        if reply.quiz.is_some() {
+            log_info!("学习模式已关闭，剥离模型返回的 quiz 字段");
+        }
+        None
+    };
     let assistant = Message {
         id: uuid::Uuid::new_v4().to_string(),
         role: "assistant".into(),
@@ -927,6 +1088,8 @@ async fn process_message(
         emotion: Some(normalize_emotion(&reply.emotion)),
         trigger_type: trigger_type.into(),
         created_at: chrono::Utc::now().timestamp_millis(),
+        session: user.session.clone(),
+        quiz: quiz_view,
     };
     {
         let conn = db_state.0.lock().await;
@@ -975,7 +1138,8 @@ async fn run_tool_audit(app: &AppHandle, source_message_id: &str) -> Result<(), 
         let conn = db_state.0.lock().await;
         (
             db::get_settings(&conn, true).map_err(|e| e.to_string())?,
-            db::list_messages(&conn, 30).map_err(|e| e.to_string())?,
+            // 工具审计跟随主会话历史，不看学习会话。
+            db::list_messages_by_session(&conn, "main", 30).map_err(|e| e.to_string())?,
         )
     };
     apply_memory_env(&mut settings, memory_env.inner());
@@ -1158,7 +1322,8 @@ pub async fn generate_scheduled_message(
     let (history, settings, preference_context) = {
         let conn = db_state.0.lock().await;
         (
-            db::list_messages(&conn, 20).map_err(|e| e.to_string())?,
+            // 提醒/主动搭话等计划消息属于主会话，只参考主会话历史。
+            db::list_messages_by_session(&conn, "main", 20).map_err(|e| e.to_string())?,
             db::get_settings(&conn, true).map_err(|e| e.to_string())?,
             user_preference_context(&conn),
         )
@@ -1186,6 +1351,8 @@ pub async fn generate_scheduled_message(
         emotion: Some(normalize_emotion(&reply.emotion)),
         trigger_type: trigger_type.into(),
         created_at: chrono::Utc::now().timestamp_millis(),
+        session: "main".into(),
+        quiz: None,
     };
     let conn = db_state.0.lock().await;
     db::insert_message(&conn, &message).map_err(|e| e.to_string())?;
@@ -1194,6 +1361,473 @@ pub async fn generate_scheduled_message(
         message.content.chars().count()
     );
     Ok(message)
+}
+
+/// 主动复习出题（供 scheduler 调用）：带学习上下文要求模型「必须出一道选择题」。
+/// quiz 缺失或校验失败时带原因重试（≤3 次），仍失败则用 Rust 模板兜底出题，保证复习会话必须出题。
+pub async fn generate_study_quiz_message(app: &AppHandle) -> Result<Message, String> {
+    let db_state = app.state::<DbState>();
+    let model = app.state::<ModelConfig>();
+    let conversation = app.state::<ConversationState>();
+    let _guard = conversation.0.lock().await;
+    log_info!("generate_study_quiz_message start");
+    if model.api_key.is_empty() {
+        return Err("未配置 DeepSeek API Key".into());
+    }
+    let (settings, words, study_context, session, history, preference_context) = {
+        let conn = db_state.0.lock().await;
+        let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+        let session = study_session(&settings);
+        (
+            settings.clone(),
+            db::enabled_group_words(&conn).map_err(|e| e.to_string())?,
+            crate::study::build_study_context(&conn, &settings),
+            session,
+            db::list_messages_by_session(&conn, session, 20).map_err(|e| e.to_string())?,
+            user_preference_context(&conn),
+        )
+    };
+    if !settings.study_enabled {
+        return Err("日语学习模式未开启".into());
+    }
+    if words.len() < 3 {
+        return Err("启用单词组词汇不足（至少 3 个才能出选择题）".into());
+    }
+    let allowed_types = crate::study::enabled_quiz_types(&settings);
+    let quiz_rules = crate::study::quiz_instructions(&settings);
+    let mut base_messages = vec![
+        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。\n这是一次主动复习出题（study_review）。请以洛琪希的口吻用一句话引出题目，并且必须在 reply_to_user 的 quiz 字段中出一道选择题。{}\n用户偏好（长期观察总结，始终生效，请自然遵循，不要刻意复述）：\n{}{}{}",ROXY_NAME,ROXY_PERSONA,local_time_description(),NATURAL_SPEECH_RULES,preference_context,study_context,quiz_rules)}),
+    ];
+    base_messages.extend(history_to_json(history));
+    base_messages.push(serde_json::json!({"role":"user","content":"现在到了复习时间：请从当前单词组里挑一个我掌握度低的单词，出一道选择题考我（必须填写 quiz 字段）。"}));
+    let client = reqwest::Client::new();
+    let mut last_reply: Option<BilingualReply> = None;
+    let mut validated_quiz: Option<crate::study::ValidatedQuiz> = None;
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        let mut messages = base_messages.clone();
+        if attempt > 0 {
+            messages.push(serde_json::json!({"role":"system","content":format!("上一次出题失败，原因：{last_error}。请重新出一道合法的选择题，必须正确填写 reply_to_user 的 quiz 字段。")}));
+        }
+        // 请求级失败直接上抛：由调度器顺延到下一次复习。
+        let reply = request_bilingual_reply(&client, model.inner(), &messages, 0.9).await?;
+        let quiz_error = match reply.quiz.as_ref() {
+            Some(quiz) => match crate::study::validate_quiz(quiz, &words, &allowed_types) {
+                Ok(validated) => {
+                    validated_quiz = Some(validated);
+                    None
+                }
+                Err(error) => Some(format!("选择题校验失败：{error}")),
+            },
+            None => Some("回复缺少 quiz 字段，必须出一道选择题".to_string()),
+        };
+        last_reply = Some(reply);
+        match quiz_error {
+            Some(error) => last_error = error,
+            None => break,
+        }
+    }
+    let reply = last_reply.ok_or("模型没有产出任何回复")?;
+    // 多次校验失败 → 模板兜底，保证主动复习必须出题。
+    let mut used_fallback = false;
+    let validated = match validated_quiz {
+        Some(validated) => validated,
+        None => {
+            log_warn!("模型出题多次校验失败（{last_error}），使用模板兜底出题");
+            used_fallback = true;
+            let fallback = crate::study::template_quiz_fallback(&words, &allowed_types)
+                .ok_or("模板兜底出题失败：组内凑不齐 3 个可用选项")?;
+            crate::study::validate_quiz(&fallback, &words, &allowed_types)
+                .map_err(|e| format!("模板兜底题未通过校验：{e}"))?
+        }
+    };
+    let quiz_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp_millis();
+    let record = db::QuizRecord {
+        id: quiz_id.clone(),
+        word_id: validated.word_id,
+        group_id: validated.word.group_id.clone(),
+        quiz_type: validated.quiz_type.clone(),
+        question: validated.question.clone(),
+        options: validated.options.clone(),
+        correct_index: validated.correct_index as i64,
+        selected_index: None,
+        is_correct: None,
+        source: "study_review".into(),
+        created_at: now,
+        answered_at: None,
+        word: validated.word.word.clone(),
+        kana: validated.word.kana.clone(),
+        meaning: validated.word.meaning.clone(),
+    };
+    let message = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: "assistant".into(),
+        // 模板兜底时用固定邀请语，避免消息正文描述的是模型那道未通过校验的题。
+        content: if used_fallback {
+            "来复习一下吧——这道题你选哪个？".to_string()
+        } else {
+            reply.chinese_text.trim().to_string()
+        },
+        japanese_text: if used_fallback {
+            Some("復習しましょう。この問題、どれを選びますか？".to_string())
+        } else {
+            Some(reply.japanese_text.trim().to_string())
+        },
+        emotion: Some(normalize_emotion(&reply.emotion)),
+        trigger_type: "study_review".into(),
+        created_at: now,
+        session: session.into(),
+        quiz: Some(db::QuizView {
+            quiz_id,
+            question: validated.question,
+            options: validated.options,
+        }),
+    };
+    {
+        let conn = db_state.0.lock().await;
+        db::insert_quiz_record(&conn, &record).map_err(|e| e.to_string())?;
+        db::insert_message(&conn, &message).map_err(|e| e.to_string())?;
+    }
+    log_info!(
+        "study review quiz generated: word_id={}, type={}",
+        validated.word_id,
+        validated.quiz_type
+    );
+    Ok(message)
+}
+
+/// 答题反馈：答对给鼓励；答错公布正确选项 + 假名 + 中文意思 + 一句记忆提示。
+/// LLM 生成失败时降级为固定文案，不影响统计记录。返回（中文, 日文）。
+async fn generate_quiz_feedback(
+    app: &AppHandle,
+    record: &db::QuizRecord,
+    word: Option<&db::WordItem>,
+    is_correct: bool,
+) -> (String, Option<String>) {
+    let model = app.state::<ModelConfig>();
+    let correct_option = record
+        .options
+        .get(record.correct_index as usize)
+        .cloned()
+        .unwrap_or_default();
+    let word_desc = word
+        .map(|w| format!("单词「{}」（假名：{}，中文意思：{}）", w.word, w.kana, w.meaning))
+        .unwrap_or_default();
+    let event = if is_correct {
+        format!("用户在日语单词复习中答对了你出的题（{}，题目：{}）。请用洛琪希的口吻给一句简短、真诚的鼓励，不要浮夸。", word_desc, record.question)
+    } else {
+        format!("用户在日语单词复习中答错了你出的题（{}，题目：{}）。请用洛琪希的口吻公布正确答案「{}」，带上假名和中文意思，再附一句简短的记忆提示（如联想、词根或例句），温和不说教。", word_desc, record.question, correct_option)
+    };
+    if !model.api_key.is_empty() {
+        let messages = vec![
+            serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。",ROXY_NAME,ROXY_PERSONA,local_time_description(),NATURAL_SPEECH_RULES)}),
+            serde_json::json!({"role":"user","content":event}),
+        ];
+        let client = reqwest::Client::new();
+        match request_bilingual_reply(&client, model.inner(), &messages, 0.8).await {
+            Ok(reply) => {
+                return (
+                    reply.chinese_text.trim().to_string(),
+                    Some(reply.japanese_text.trim().to_string()),
+                )
+            }
+            Err(error) => log_warn!("答题反馈生成失败，使用固定文案：{error}"),
+        }
+    }
+    // 降级固定文案。
+    if is_correct {
+        ("答对了！保持这个节奏。".to_string(), None)
+    } else if let Some(word) = word {
+        (
+            format!(
+                "正确答案是「{}」。{}（{}）：{}。下次一起记住它。",
+                correct_option, word.word, word.kana, word.meaning
+            ),
+            None,
+        )
+    } else {
+        (format!("正确答案是「{}」。", correct_option), None)
+    }
+}
+
+/// answer_quiz 的返回视图：status=ok 首次作答 | already 重复作答回显 | expired 题目不存在或已失效。
+#[derive(Serialize)]
+pub struct QuizAnswerView {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correct_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_correct: Option<bool>,
+}
+
+/// 用户点击选项作答：判定 100% 本地（比对选项索引）；首次作答后生成洛琪希口吻的反馈消息并推送。
+#[tauri::command]
+pub async fn answer_quiz(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    quiz_id: String,
+    selected_index: i64,
+) -> Result<QuizAnswerView, String> {
+    let answered = {
+        let mut conn = db_state.0.lock().await;
+        let result = db::answer_quiz_record(&mut conn, &quiz_id, selected_index)
+            .map_err(|e| e.to_string())?;
+        let Some(result) = result else {
+            // 题目不存在（已失效）：不报错，前端提示「已失效」。
+            return Ok(QuizAnswerView {
+                status: "expired".into(),
+                correct_index: None,
+                selected_index: None,
+                is_correct: None,
+            });
+        };
+        let session = db::get_settings(&conn, true)
+            .map_err(|e| e.to_string())
+            .map(|settings| study_session(&settings))?;
+        (result, session)
+    };
+    let (result, session) = answered;
+    let record = &result.record;
+    let view = QuizAnswerView {
+        status: if result.already_answered {
+            "already".into()
+        } else {
+            "ok".into()
+        },
+        correct_index: Some(record.correct_index),
+        selected_index: Some(record.selected_index.unwrap_or(selected_index)),
+        is_correct: record.is_correct,
+    };
+    // 重复作答：直接返回已落库结果，不再生成反馈消息。
+    if result.already_answered {
+        return Ok(view);
+    }
+    let is_correct = record.is_correct.unwrap_or(false);
+    let word = {
+        let conn = db_state.0.lock().await;
+        db::list_words(&conn, &record.group_id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|w| w.id == record.word_id)
+    };
+    let (chinese, japanese) = generate_quiz_feedback(&app, record, word.as_ref(), is_correct).await;
+    let message = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: "assistant".into(),
+        content: chinese,
+        japanese_text: japanese,
+        emotion: Some(if is_correct { "happy" } else { "calm" }.into()),
+        trigger_type: "study_feedback".into(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        session: session.into(),
+        quiz: None,
+    };
+    {
+        let conn = db_state.0.lock().await;
+        db::insert_message(&conn, &message).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("assistant-message", message.clone());
+    crate::voice_output::schedule(app.clone(), message);
+    // 持续模式：答完立即衔接下一题；本组全部掌握时改发休息/换组建议并暂停自动出题。
+    let continuous = {
+        let conn = db_state.0.lock().await;
+        db::get_settings(&conn, true)
+            .map(|s| s.study_enabled && s.study_continuous_enabled)
+            .unwrap_or(false)
+    };
+    if continuous {
+        let app_next = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let all_mastered = {
+                let next_state = app_next.state::<DbState>();
+                let conn = next_state.0.lock().await;
+                db::enabled_group_all_mastered(&conn).unwrap_or(false)
+            };
+            let generated = if all_mastered {
+                log_info!("持续模式：当前单词组已全部掌握，发送休息/换组建议");
+                generate_study_mastered_notice(&app_next).await
+            } else {
+                generate_study_quiz_message(&app_next).await
+            };
+            match generated {
+                Ok(message) => {
+                    let _ = app_next.emit("assistant-message", message.clone());
+                    crate::voice_output::schedule(app_next.clone(), message);
+                }
+                Err(error) => log_warn!("持续模式衔接出题失败：{error}"),
+            }
+        });
+    }
+    Ok(view)
+}
+
+/// 持续模式下当前组全部单词「已掌握」时的提示消息：夸奖并建议休息或更换新单词组。
+async fn generate_study_mastered_notice(app: &AppHandle) -> Result<Message, String> {
+    let db_state = app.state::<DbState>();
+    let model = app.state::<ModelConfig>();
+    if model.api_key.is_empty() {
+        return Err("未配置模型 API Key".into());
+    }
+    let (session, group_name) = {
+        let conn = db_state.0.lock().await;
+        let settings = db::get_settings(&conn, true).map_err(|e| e.to_string())?;
+        let name = db::list_word_groups(&conn)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|g| g.enabled)
+            .map(|g| g.name)
+            .unwrap_or_default();
+        (study_session(&settings), name)
+    };
+    let messages = vec![
+        serde_json::json!({"role":"system","content":format!("你是桌宠{}。人物设定：{}\n当前时间：{}，用户时区：Asia/Shanghai。{}\n一次性输出含义相同的中文和自然日文，并给出情绪。必须调用 reply_to_user 工具完成回复，不要输出普通文本。",ROXY_NAME,ROXY_PERSONA,local_time_description(),NATURAL_SPEECH_RULES)}),
+        serde_json::json!({"role":"user","content":format!("用户正在学习的日语单词组「{}」里的单词已经全部达到「已掌握」（连续答对）。请用洛琪希的口吻真诚地夸奖用户，然后建议休息一下，或者到设置的日语学习页换一组新词继续。保持简短。", group_name)}),
+    ];
+    let client = reqwest::Client::new();
+    let reply = request_bilingual_reply(&client, model.inner(), &messages, 0.8).await?;
+    let message = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        role: "assistant".into(),
+        content: reply.chinese_text.trim().to_string(),
+        japanese_text: Some(reply.japanese_text.trim().to_string()),
+        emotion: Some("happy".into()),
+        trigger_type: "study_feedback".into(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        session: session.into(),
+        quiz: None,
+    };
+    {
+        let conn = db_state.0.lock().await;
+        db::insert_message(&conn, &message).map_err(|e| e.to_string())?;
+    }
+    Ok(message)
+}
+
+/// 设置页「日语学习」：单词组列表（含掌握度计数与文件缺失标记）。
+#[tauri::command]
+pub async fn list_word_groups(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<db::WordGroup>, String> {
+    let conn = db_state.0.lock().await;
+    db::list_word_groups(&conn).map_err(|e| e.to_string())
+}
+
+/// 展开查看组内单词（含派生掌握度标签）。
+#[tauri::command]
+pub async fn list_group_words(
+    db_state: State<'_, DbState>,
+    group_id: String,
+) -> Result<Vec<db::WordItem>, String> {
+    let conn = db_state.0.lock().await;
+    db::list_words(&conn, &group_id).map_err(|e| e.to_string())
+}
+
+/// 用户在设置页手动修改某个单词的掌握度（mastered/shaky/forgotten/unlearned），返回更新后的词条。
+#[tauri::command]
+pub async fn set_word_mastery(
+    db_state: State<'_, DbState>,
+    word_id: i64,
+    mastery: String,
+) -> Result<db::WordItem, String> {
+    let conn = db_state.0.lock().await;
+    db::set_word_mastery(&conn, word_id, &mastery).map_err(|e| e.to_string())
+}
+
+/// 单选启用单词组：group_id 传 None 表示取消启用；返回最新的组列表。
+#[tauri::command]
+pub async fn set_study_group(
+    db_state: State<'_, DbState>,
+    group_id: Option<String>,
+) -> Result<Vec<db::WordGroup>, String> {
+    let mut conn = db_state.0.lock().await;
+    db::set_enabled_group(&mut conn, group_id.as_deref()).map_err(|e| {
+        if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+            "单词组不存在".to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
+    db::list_word_groups(&conn).map_err(|e| e.to_string())
+}
+
+/// 「重新导入」按钮：重新扫描 data/wordgroups/*.xlsx，返回最新的组列表。
+#[tauri::command]
+pub async fn reimport_word_groups(
+    db_state: State<'_, DbState>,
+) -> Result<Vec<db::WordGroup>, String> {
+    let mut conn = db_state.0.lock().await;
+    let count = crate::study::scan_and_import(&mut conn, &crate::data_dir())?;
+    log_info!("单词组重新导入完成：{count} 个组");
+    db::list_word_groups(&conn).map_err(|e| e.to_string())
+}
+
+/// 历史页「学习会话」标签用的题目视图：关联单词信息，字段名与前端 QuizRecord 对齐。
+#[derive(Serialize)]
+pub struct QuizHistoryItem {
+    pub quiz_id: String,
+    pub quiz_type: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub correct_index: i64,
+    pub selected_index: Option<i64>,
+    pub is_correct: Option<bool>,
+    pub word: String,
+    pub kana: String,
+    pub meaning: String,
+    pub source: String,
+    pub created_at: i64,
+    pub answered_at: Option<i64>,
+}
+
+/// 历史页「学习会话」标签：学习会话消息（正序）+ 完整答题记录（倒序）。
+#[derive(Serialize)]
+pub struct StudyHistory {
+    pub messages: Vec<Message>,
+    pub quizzes: Vec<QuizHistoryItem>,
+}
+
+#[tauri::command]
+pub async fn list_study_history(
+    db_state: State<'_, DbState>,
+    limit: Option<u32>,
+) -> Result<StudyHistory, String> {
+    let conn = db_state.0.lock().await;
+    let limit = limit.unwrap_or(100);
+    let messages = db::list_study_messages(&conn, limit).map_err(|e| e.to_string())?;
+    let records = db::list_quiz_records(&conn, limit.saturating_mul(2)).map_err(|e| e.to_string())?;
+    // 关联目标词的单词/假名/意思（词可能已被重导入删除，缺失时留空不影响展示）。
+    let words = db::list_word_groups(&conn)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|group| db::list_words(&conn, &group.id).ok())
+        .flatten()
+        .map(|word| (word.id, word))
+        .collect::<HashMap<_, _>>();
+    let quizzes = records
+        .into_iter()
+        .map(|record| {
+            let word = words.get(&record.word_id);
+            QuizHistoryItem {
+                quiz_id: record.id,
+                quiz_type: record.quiz_type,
+                question: record.question,
+                options: record.options,
+                correct_index: record.correct_index,
+                selected_index: record.selected_index,
+                is_correct: record.is_correct,
+                word: word.map(|w| w.word.clone()).unwrap_or_default(),
+                kana: word.map(|w| w.kana.clone()).unwrap_or_default(),
+                meaning: word.map(|w| w.meaning.clone()).unwrap_or_default(),
+                source: record.source,
+                created_at: record.created_at,
+                answered_at: record.answered_at,
+            }
+        })
+        .collect();
+    Ok(StudyHistory { messages, quizzes })
 }
 
 #[tauri::command]
@@ -1370,6 +2004,20 @@ pub async fn toggle_proactive_enabled(
         db::toggle_proactive_enabled(&conn).map_err(|e| e.to_string())?
     };
     let _ = app.emit("proactive-enabled-changed", enabled);
+    Ok(enabled)
+}
+
+/// 右键菜单切换日语学习模式：即时生效，广播事件同步各窗口设置态。
+#[tauri::command]
+pub async fn toggle_study_enabled(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<bool, String> {
+    let enabled = {
+        let conn = db_state.0.lock().await;
+        db::toggle_study_enabled(&conn).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("study-enabled-changed", enabled);
     Ok(enabled)
 }
 

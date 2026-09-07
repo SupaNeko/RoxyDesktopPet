@@ -14,6 +14,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 - 主动对话、待办提醒（SQLite 可靠调度）。
 - 可选 GPT-SoVITS v2ProPlus 本地日语语音输出（独立扩展包，需 NVIDIA GPU，不在安装包内）。
 - 基于本地 SQLite + Embedding API 的长期记忆（观察者模式，**不依赖** Qdrant/PostgreSQL/Redis/Python 记忆服务；README 与部分旧文档中提到的 Qdrant 方案已被 `docs/local-memory-design.md` 的 Rust + SQLite 方案取代）。
+- 日语学习模式：`data/wordgroups/*.xlsx` 配置单词组（单词/平假名/中文意思），设置页单选启用；AI 以三选一选择题主动复习（掌握度低的优先；题型可配置：释义 meaning / 拼写 spelling / 读音 reading），本地判定作答并派生掌握度统计（重导入按单词+假名自然键合并，统计不丢；用户可在设置页手动改掌握度）；可选与主会话隔离（messages.session，隔离期间主会话的主动搭话暂停触发但不改设置）；右键菜单可直接开关学习模式；复习出题有未答完挂起题时不重复触发；持续出题模式下答完立即出下一题（全部掌握时建议休息或换组）；历史页「学习会话」标签按时间线穿插题目与反馈。
 - MCP 服务器接入（rmcp crate）、编程工具完成提醒（Tool Hook）、只读系统感知（任务栏应用 / 硬件占用 / SMTC 当前播放）、联网搜索工具。
 - 可选开机自启（默认关闭，保存设置后写入或移除当前用户 Windows 启动项）。
 - API 消耗统计（右键菜单「消耗统计」页：ASR 调用次数、LLM 调用次数与输入/输出 token，观察者单独归类）。
@@ -30,6 +31,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 | 数据 | SQLite（rusqlite bundled），单文件 `data/roxydesktoppet.db` |
 | 音频 | cpal（采集）、rodio（播放）、voice_activity_detector（VAD）、tokio-tungstenite（讯飞 ASR WebSocket） |
 | 网络 | reqwest（LLM/Embedding/TTS）、rmcp（MCP 客户端，stdio + Streamable HTTP） |
+| 学习模式 | calamine（解析 data/wordgroups/*.xlsx 单词组配置） |
 | Windows 集成 | windows-sys / windows crate（托盘、全局输入钩子、命中测试、SMTC、DWM）、sysinfo（硬件占用）、tauri-plugin-autostart（开机自启） |
 
 ## 3. 目录结构与模块划分
@@ -54,8 +56,10 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 │  │  ├─ scheduler.rs       # 待办提醒与主动消息调度
 │  │  ├─ tool_hook.rs / tool_hook_config.rs / hook_server.rs  # 编程工具（Claude Code/Codex/opencode）完成提醒
 │  │  ├─ system_monitor.rs / media_control.rs  # 只读系统感知（任务栏、硬件、SMTC）
+│  │  ├─ study.rs            # 日语学习模式：xlsx 单词组导入、掌握度统计派生、选择题校验与兜底出题
 │  │  ├─ search.rs          # 联网搜索工具
 │  │  ├─ usage.rs           # API 消耗统计埋点（usage_events 表，全局 AppHandle 无侵入记录）
+│  │  │                     # 学习模式：messages 表含 session 列（main/study 隔离），quiz_records 表持久化每道复习题与用户作答
 │  │  ├─ global_input.rs / native_hit_test.rs / pet_interaction.rs / fullscreen_watch.rs  # 桌面交互
 │  │  └─ logger.rs          # log_info!/log_warn!/log_error! 宏（脱敏日志，写入 data/logs/）
 │  ├─ tauri.conf.json       # 6 个窗口定义（pet / pet-menu / settings / todos / history / usage）、CSP、NSIS 打包配置
@@ -63,7 +67,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 ├─ docs/                    # 设计文档（见第 8 节）
 ├─ scripts/                 # PowerShell：语音扩展包构建与 GPT-SoVITS 开发环境准备
 ├─ public/                  # 洛琪希 8 种情绪 PNG（构建时复制到 dist/）
-├─ data/                    # 运行时数据（roxydesktoppet.db、日志、窗口位置），gitignored
+├─ data/                    # 运行时数据（roxydesktoppet.db、日志、窗口位置、wordgroups/ 日语单词组 xlsx），gitignored
 ├─ voice/                   # GPT-SoVITS 语音扩展（运行时、模型、参考音频），gitignored
 ├─ tools/                   # 美术素材处理脚本（Python/Node），gitignored
 └─ artifacts/               # 发布产物（语音扩展 ZIP），gitignored
@@ -74,7 +78,7 @@ RoxyDesktopPet 是一个**仅限 Windows x64** 的本地优先（local-first）A
 - **UI 只通过 Tauri `invoke` 和事件订阅访问后端**，不持有明文 API Key，不直接请求模型 API。
 - 所有可靠状态（消息、待办、记忆、提醒 occurrence）写入 SQLite，不只存在内存中。
 - 同一时刻只允许一个主 LLM 工具循环（`ConversationState` 互斥锁）；P0 提醒 > P1 用户交互 > P2 主动消息。
-- 语音输出是可选能力门控：任何环节缺失（扩展包、GPU、凭据）都降级为纯文本，**不得影响主对话链路**。
+- 语音输出是可选能力门控：任何环节缺失（扩展包、GPU、凭据）都降级为纯文本，**不得影响主对话链路**。新语音到达时会打断尚未播完的旧语音（voice_output.rs 的 epoch + CURRENT_SINK 机制）。
 - `.env` 读取位置：开发时读项目根目录，发布版读 exe 同目录（见 `lib.rs` 中 `cfg!(debug_assertions)` 分支）；`data_dir()` 同理。
 
 ## 4. 构建与开发命令
@@ -99,7 +103,7 @@ cargo test                    # 单元测试以 #[cfg(test)] 模块内联在各 
 
 ## 5. 测试策略与现状
 
-- **Rust 单元测试为主**：约 35 个 `#[test]`/`#[tokio::test]`，分布在 `asr.rs`、`audio.rs`、`commands.rs`、`db.rs`、`hook_server.rs`、`memory.rs`、`memory_store.rs`、`search.rs`、`system_monitor.rs`、`voice_output.rs` 的 `#[cfg(test)] mod tests` 中。改动这些模块时应运行 `cargo test` 并为纯逻辑函数补充测试。
+- **Rust 单元测试为主**：约 35 个 `#[test]`/`#[tokio::test]`，分布在 `asr.rs`、`audio.rs`、`commands.rs`、`db.rs`、`hook_server.rs`、`memory.rs`、`memory_store.rs`、`search.rs`、`study.rs`、`system_monitor.rs`、`voice_output.rs` 的 `#[cfg(test)] mod tests` 中。改动这些模块时应运行 `cargo test` 并为纯逻辑函数补充测试。
 - **前端目前没有任何自有的 vitest 测试**。注意：`pnpm test`（`vitest run`，无 vitest 配置文件）会误扫 `voice/runtime/` 里 gradio 的 vendored 测试并失败——这是已知现状，不代表项目测试失败。若要给前端加测试，应先添加 vitest 配置排除 `voice/`、`dist/` 等目录。
 - `docs/DEVELOPMENT.md` 第 13 节描述了更完整的测试策略（集成测试、Windows 专项验收），多数属于规划，未全部落地。
 - 无 CI/CD：仓库没有 `.github/workflows` 或其他流水线配置。

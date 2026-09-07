@@ -19,6 +19,7 @@ mod observer;
 mod pet_interaction;
 mod scheduler;
 mod search;
+mod study;
 mod system_monitor;
 mod tool_hook;
 mod tool_hook_config;
@@ -280,8 +281,12 @@ pub fn run() {
             Err(err) => log_warn!("旧数据库迁移失败（{}），将创建新数据库", err),
         }
     }
-    let db = db::open(&db_path).expect("failed to open RoxyDesktopPet database");
+    let mut db = db::open(&db_path).expect("failed to open RoxyDesktopPet database");
     log_info!("数据库已打开：{}", db_path.display());
+    // 日语学习模式：确保单词组目录存在，并启动时导入一次 data/wordgroups/*.xlsx。
+    if let Err(error) = study::scan_and_import(&mut db, &data_dir()) {
+        log_warn!("启动时导入单词组失败：{error}");
+    }
     let voice_enabled = db::get_settings(&db, false)
         .ok()
         .is_some_and(|settings| settings.voice_output_mode == "gpt_sovits");
@@ -585,6 +590,8 @@ pub fn run() {
             commands::open_app_window,
             commands::show_pet_menu,
             commands::toggle_proactive_enabled,
+            commands::toggle_study_enabled,
+            commands::set_word_mastery,
             commands::set_pet_outfit,
             commands::scan_vits_models,
             commands::test_voice_output,
@@ -603,6 +610,12 @@ pub fn run() {
             commands::set_mcp_server_enabled,
             commands::list_mcp_server_tools,
             commands::get_usage_stats,
+            commands::list_word_groups,
+            commands::list_group_words,
+            commands::set_study_group,
+            commands::reimport_word_groups,
+            commands::answer_quiz,
+            commands::list_study_history,
             pet_interaction::set_mouse_passthrough,
             pet_interaction::get_mouse_passthrough,
             native_hit_test::update_pet_hit_test_layout

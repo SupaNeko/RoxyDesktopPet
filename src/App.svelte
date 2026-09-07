@@ -3,12 +3,12 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { emit, listen } from '@tauri-apps/api/event';
-  import { BarChart3, History, ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Shirt, Trash2, X } from 'lucide-svelte';
-  import { getRuntimeStatus, getSettings, listMainSessionHistory, listMessages, saveSettings, sendMessage, setPetOutfit, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools, getUsageStats } from './lib/api';
-  import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, RuntimeStatus, Todo, ToolHookToolInfo, UsageSummary, VoiceStatus } from './lib/types';
+  import { BarChart3, BookOpenText, History, ListTodo, MessageCircle, Mic, MicOff, MousePointer2, Plus, Send, Settings, Shirt, Trash2, X } from 'lucide-svelte';
+  import { getRuntimeStatus, getSettings, listMainSessionHistory, listMessages, saveSettings, sendMessage, setPetOutfit, startVoiceListening, stopVoiceListening, listMicrophoneDevices, testVoiceOutput, startGptSovits, listTodos, deleteTodo, openAppWindow, openPetMenu, toggleProactiveEnabled, toggleStudyEnabled, setPushToTalkShortcut, beginShortcutCapture, cancelShortcutCapture, setMousePassthrough, getMousePassthrough, listToolHookSupport, writeToolHookConfig, removeToolHookConfig, testToolHook, updatePetHitTestLayout, getTaskbarApps, getHardwareStats, getNowPlaying, listMcpServers, addMcpServer, updateMcpServer, removeMcpServer, setMcpServerEnabled, listMcpServerTools, getUsageStats, listWordGroups, listGroupWords, setStudyGroup, setWordMastery, reimportWordGroups, answerQuiz, listStudyHistory } from './lib/api';
+  import type { AppSettings, McpServerRequest, McpServerStatus, McpToolInfo, Message, QuizRecord, RuntimeStatus, StudyHistory, Todo, ToolHookToolInfo, UsageSummary, VoiceStatus, WordGroup, WordItem } from './lib/types';
   import type { CapturedBinding } from './lib/api';
   const label = '__TAURI_INTERNALS__' in window ? getCurrentWindow().label : new URLSearchParams(location.search).get('view') ?? 'pet';
-  let settings = $state<AppSettings>({ pet_name: 'RoxyDesktopPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default', search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30, autostart_enabled: false });
+  let settings = $state<AppSettings>({ pet_name: 'RoxyDesktopPet', persona: '', user_name: '你', api_base_url: '', api_model: '', api_key_configured: false, voice_output_enabled: false, voice_output_mode: 'disabled', tts_api_protocol: 'dashscope', tts_api_base_url: 'https://dashscope.aliyuncs.com/api/v1', tts_api_model: 'qwen3-tts-flash', tts_api_key: '', tts_api_configured: false, tts_api_voice: 'Cherry', tts_api_language: 'Chinese', vits_model_name: '', vits_model_path: '', vits_speaker_id: null, vits_target_language: 'ja', vits_speed: 1, vits_emotion_params: '', vits_translate_enabled: true, microphone_device_name: null, asr_app_id: '', asr_api_key: '', asr_api_secret: '', asr_configured: false, proactive_enabled: false, proactive_min_minutes: 45, proactive_max_minutes: 120, proactive_daily_limit: 6, qdrant_url: 'http://127.0.0.1:6333', embedding_base_url: '', embedding_model: '', embedding_api_key: '', embedding_dimension: 0, memory_configured: false, memory_observer_enabled: true, memory_observer_interval: 30, tool_hook_enabled: false, tool_hook_mode: 'fixed', tool_hook_port: 34125, tool_hook_tool_texts: {}, tool_hook_include_last_message: true, tool_hook_min_interval_minutes: 10, tool_hook_daily_limit: 20, tool_hook_debounce_seconds: 0, tool_hook_voice_enabled: true, system_status_enabled: false, taskbar_apps_enabled: false, now_playing_enabled: false, voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default', search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false, agent_max_tool_rounds: 30, autostart_enabled: false, study_enabled: false, study_isolated: true, study_review_enabled: true, study_review_min_minutes: 30, study_review_max_minutes: 90, study_review_daily_limit: 8, study_quiz_types: 'meaning,spelling,reading', study_continuous_enabled: false, study_quiz_ttl_seconds: 60 });
   let runtime = $state<RuntimeStatus | null>(null), messages = $state<Message[]>([]);
   let text = $state(''), error = $state('');
   let busy = $state(false), bubbleVisible = $state(false), composerVisible = $state(false), saved = $state(false);
@@ -84,7 +84,85 @@
   const TRIGGER_LABELS: Record<string, string> = { reminder_due: '提醒', companion_tick: '主动搭话', tool_hook: '工具提醒', agent_followup: '任务转告' };
   const formatDay = (ts: number) => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(ts));
   const formatTime = (ts: number) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ts));
-  let settingsTab = $state<'general' | 'toolhook' | 'mcp'>('general');
+  let settingsTab = $state<'general' | 'toolhook' | 'mcp' | 'study'>('general');
+  // 日语学习 tab 状态：单词组列表、展开查看的组内单词、导入中标记。
+  let wordGroups = $state<WordGroup[]>([]);
+  let studyWordsFor = $state<string | null>(null);
+  let studyWords = $state<WordItem[]>([]);
+  let studyBusy = $state(false);
+  const MASTERY_LABELS: Record<string, string> = { mastered: '已掌握', shaky: '勉强记得', forgotten: '不记得', unlearned: '未学' };
+  // 题型配置：存储为逗号分隔字符串，保存时由后端规范化（至少保留一种）。
+  const QUIZ_TYPE_OPTIONS = [
+    { id: 'meaning', label: '给日文单词选中文意思' },
+    { id: 'spelling', label: '给中文意思选日文单词' },
+    { id: 'reading', label: '给日文单词选平假名读音' },
+  ];
+  const quizTypeOn = (id: string) => settings.study_quiz_types.split(',').includes(id);
+  function toggleQuizType(id: string) {
+    const selected = new Set(settings.study_quiz_types.split(',').filter(Boolean));
+    if (selected.has(id)) { if (selected.size === 1) return; selected.delete(id); } else selected.add(id);
+    settings.study_quiz_types = QUIZ_TYPE_OPTIONS.map((t) => t.id).filter((t) => selected.has(t)).join(',');
+  }
+  async function loadWordGroups() {
+    try { wordGroups = await listWordGroups(); } catch (e) { error = String(e); }
+  }
+  async function chooseStudyGroup(group: WordGroup) {
+    if (studyBusy) return;
+    studyBusy = true; error = '';
+    // 单选：再次点击已启用的组表示取消启用。
+    try { await setStudyGroup(group.enabled ? null : group.id); await loadWordGroups(); } catch (e) { error = String(e); } finally { studyBusy = false; }
+  }
+  async function reimportGroups() {
+    if (studyBusy) return;
+    studyBusy = true; error = '';
+    try { wordGroups = await reimportWordGroups(); if (studyWordsFor) studyWords = await listGroupWords(studyWordsFor); } catch (e) { error = String(e); } finally { studyBusy = false; }
+  }
+  async function toggleStudyWords(group: WordGroup) {
+    if (studyWordsFor === group.id) { studyWordsFor = null; return; }
+    studyWordsFor = group.id; studyWords = []; error = '';
+    try { studyWords = await listGroupWords(group.id); } catch (e) { error = String(e); }
+  }
+  // 桌宠气泡选择题作答状态：quiz_id → 用户选择与正确选项索引（correct=-1 表示已选待判定）。
+  let quizAnswers = $state<Record<string, { selected: number; correct: number }>>({});
+  let quizBusy = $state('');
+  async function answerCurrentQuiz(quizId: string, index: number) {
+    if (quizAnswers[quizId] || quizBusy) return;
+    // 乐观点亮：用户点击的选项立即高亮，不等后端/AI 反馈返回。
+    quizAnswers[quizId] = { selected: index, correct: -1 };
+    quizBusy = quizId; error = '';
+    try {
+      const result = await answerQuiz(quizId, index);
+      if (result.status === 'expired') { delete quizAnswers[quizId]; error = '这道题已失效'; return; }
+      if (result.correct_index != null) quizAnswers[quizId] = { selected: result.selected_index ?? index, correct: result.correct_index };
+    } catch (e) { delete quizAnswers[quizId]; error = String(e); } finally { quizBusy = ''; }
+  }
+  // 手动修改单词掌握度（四档下拉），保存后刷新组统计。
+  async function changeWordMastery(item: WordItem, mastery: string) {
+    if (studyBusy || item.mastery === mastery) return;
+    studyBusy = true; error = '';
+    try {
+      const updated = await setWordMastery(item.id, mastery);
+      if (updated) studyWords = studyWords.map((w) => (w.id === updated.id ? { ...w, mastery: updated.mastery, correct_count: updated.correct_count, wrong_count: updated.wrong_count } : w));
+      await loadWordGroups();
+    } catch (e) { error = String(e); } finally { studyBusy = false; }
+  }
+  // 历史页标签：主会话 / 学习会话（学习标签展示 study 会话消息与每道题的作答记录）。
+  let historyTab = $state<'main' | 'study'>('main');
+  let studyHistory = $state<StudyHistory>({ messages: [], quizzes: [] });
+  let studyHistoryLoading = $state(false);
+  async function loadStudyHistory() {
+    if (studyHistoryLoading) return;
+    studyHistoryLoading = true; error = '';
+    try { studyHistory = await listStudyHistory(); } catch (e) { error = String(e); } finally { studyHistoryLoading = false; }
+  }
+  const studyAnswered = $derived(studyHistory.quizzes.filter((q) => q.selected_index !== null));
+  const studyCorrectRate = $derived(studyAnswered.length === 0 ? 0 : Math.round(studyAnswered.filter((q) => q.is_correct).length / studyAnswered.length * 100));
+  // 学习历史统一时间线：题目卡片与 AI 反馈/对话消息按时间正序穿插（后端消息为倒序，统一排序）。
+  interface StudyTimelineItem { ts: number; kind: 'quiz' | 'msg'; quiz?: QuizRecord; msg?: Message; }
+  const studyTimeline = $derived<StudyTimelineItem[]>([
+    ...studyHistory.quizzes.map((quiz) => ({ ts: quiz.created_at, kind: 'quiz' as const, quiz })),
+    ...studyHistory.messages.map((msg) => ({ ts: msg.created_at, kind: 'msg' as const, msg })),
+  ].sort((a, b) => a.ts - b.ts));
   let mcpServers = $state<McpServerStatus[]>([]);
   let mcpEditing = $state<number | 'new' | null>(null);
   const emptyMcpForm = (): McpServerRequest => ({ name: '', transport: 'remote', command: '', args: '', env: '', url: '', headers: '', timeout_seconds: 120 });
@@ -171,11 +249,11 @@
   function loadPetAlphaData(src: string): Promise<ImageData | null> { let cached = petAlphaCache.get(src); if (!cached) { cached = (async () => { try { const image = new Image(); image.src = src; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight; const context = canvas.getContext('2d', { willReadFrequently: true }); if (!context) return null; context.drawImage(image, 0, 0); return context.getImageData(0, 0, canvas.width, canvas.height); } catch { return null; } })(); petAlphaCache.set(src, cached); } return cached; }
   function alphaRuns(image: ImageData): { start: number; end: number }[][] { return Array.from({ length: image.height }, (_, y) => { const runs: { start: number; end: number }[] = []; let start = -1; for (let x = 0; x < image.width; x++) { const opaque = image.data[(y * image.width + x) * 4 + 3] > 16; if (opaque && start < 0) start = x; if (!opaque && start >= 0) { runs.push({ start, end: x }); start = -1; } } if (start >= 0) runs.push({ start, end: image.width }); return runs; }); }
   function schedulePetHitTestLayout() { if (label !== 'pet' || hitTestSyncQueued) return; hitTestSyncQueued = true; requestAnimationFrame(async () => { hitTestSyncQueued = false; if (hitTestSyncInFlight) { schedulePetHitTestLayout(); return; } hitTestSyncInFlight = true; try { await syncPetHitTestLayout(); } finally { hitTestSyncInFlight = false; } }); }
-  async function syncPetHitTestLayout() { if (label !== 'pet') return; await tick(); const root = document.querySelector<HTMLElement>('.pet-window'), pet = document.querySelector<HTMLElement>('.pet'); if (!root || !pet) return; const rootRect = root.getBoundingClientRect(); const rect = (element: Element) => { const bounds = element.getBoundingClientRect(); return { x: bounds.left - rootRect.left, y: bounds.top - rootRect.top, width: bounds.width, height: bounds.height }; }; const petRect = { x: pet.offsetLeft, y: pet.offsetTop, width: pet.offsetWidth, height: pet.offsetHeight }; const interactive = [...document.querySelectorAll('.speech-bubble, .pet-composer, .mic-indicator')].map(rect); const image = await loadPetAlphaData(petImageSrc); const petMask = image ? { rect: petRect, imageWidth: image.width, imageHeight: image.height, rows: alphaRuns(image) } : { rect: petRect, imageWidth: 1, imageHeight: 1, rows: [[{ start: 0, end: 1 }]] }; const rootStyle = getComputedStyle(root); const paddingHeight = parseFloat(rootStyle.paddingTop) + parseFloat(rootStyle.paddingBottom); const flowHeight = [...root.children].reduce((total, child) => { const element = child as HTMLElement, style = getComputedStyle(element); return style.position === 'absolute' ? total : total + element.offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom); }, 0); const contentHeight = Math.max(230, Math.ceil(paddingHeight + flowHeight)), scaleFactor = window.devicePixelRatio || 1; const signature = JSON.stringify({ scaleFactor, interactive, pet: petMask.rect, image: petImageSrc, contentHeight, passthrough: mousePassthrough }); if (signature === lastHitTestLayout) return; lastHitTestLayout = signature; try { await updatePetHitTestLayout({ scaleFactor, interactive, pet: petMask, contentHeight }); } catch (e) { console.warn('同步原生命中区域失败:', e); } }  function showBubble(timed = true, emotion?: string | null) {
+  async function syncPetHitTestLayout() { if (label !== 'pet') return; await tick(); const root = document.querySelector<HTMLElement>('.pet-window'), pet = document.querySelector<HTMLElement>('.pet'); if (!root || !pet) return; const rootRect = root.getBoundingClientRect(); const rect = (element: Element) => { const bounds = element.getBoundingClientRect(); return { x: bounds.left - rootRect.left, y: bounds.top - rootRect.top, width: bounds.width, height: bounds.height }; }; const petRect = { x: pet.offsetLeft, y: pet.offsetTop, width: pet.offsetWidth, height: pet.offsetHeight }; const interactive = [...document.querySelectorAll('.speech-bubble, .pet-composer, .mic-indicator')].map(rect); const image = await loadPetAlphaData(petImageSrc); const petMask = image ? { rect: petRect, imageWidth: image.width, imageHeight: image.height, rows: alphaRuns(image) } : { rect: petRect, imageWidth: 1, imageHeight: 1, rows: [[{ start: 0, end: 1 }]] }; const rootStyle = getComputedStyle(root); const paddingHeight = parseFloat(rootStyle.paddingTop) + parseFloat(rootStyle.paddingBottom); const flowHeight = [...root.children].reduce((total, child) => { const element = child as HTMLElement, style = getComputedStyle(element); return style.position === 'absolute' ? total : total + element.offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom); }, 0); const contentHeight = Math.max(230, Math.ceil(paddingHeight + flowHeight)), scaleFactor = window.devicePixelRatio || 1; const signature = JSON.stringify({ scaleFactor, interactive, pet: petMask.rect, image: petImageSrc, contentHeight, passthrough: mousePassthrough }); if (signature === lastHitTestLayout) return; lastHitTestLayout = signature; try { await updatePetHitTestLayout({ scaleFactor, interactive, pet: petMask, contentHeight }); } catch (e) { console.warn('同步原生命中区域失败:', e); } }  function showBubble(timed = true, emotion?: string | null, durationSeconds?: number) {
     bubbleVisible = true;
     if (bubbleTimer !== null) window.clearTimeout(bubbleTimer);
     petEmotion = emotion && emotion in (petOutfits[0].images ?? {}) ? emotion as PetEmotion : 'calm';
-    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000) : null;
+    bubbleTimer = timed ? window.setTimeout(() => { bubbleVisible = false; petEmotion = 'calm'; bubbleTimer = null; schedulePetHitTestLayout(); }, Math.max(1, durationSeconds ?? bubbleDisplaySeconds) * 1000) : null;
     schedulePetHitTestLayout();
   }
   function hideBubble() {
@@ -202,12 +280,14 @@
     }
     let unlisteners: (() => void)[] = [];
     let menuResizeObserver: ResizeObserver | null = null;
+    // 提升到 onMount 作用域：窗口获得焦点（每次弹出菜单）时也会重新测量，避免高度被旧值裁切。
+    let resizeMenuWindow: () => void = () => {};
     if (label === 'pet-menu') {
       document.documentElement.style.overflow='hidden';
       document.body.style.overflow='hidden';
       const menu=document.querySelector<HTMLElement>('.pet-menu');
       if (menu) {
-        const resizeMenuWindow=()=>{
+        resizeMenuWindow=()=>{
           const bounds=menu.getBoundingClientRect();
           getCurrentWindow().setSize(new LogicalSize(Math.ceil(bounds.width + 34), Math.ceil(bounds.height + 27))).catch(() => {});
         };
@@ -216,13 +296,14 @@
         resizeMenuWindow();
       }
     }
-    const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); }, 3000) : null;
+    // 设置页每 3 秒刷新运行时状态；停留在「日语学习」tab 时同步刷新单词组统计与展开的单词表。
+    const runtimeRefresh = label === 'settings' ? window.setInterval(() => { getRuntimeStatus().then((status) => runtime = status).catch(() => {}); if (settingsTab === 'study') { listWordGroups().then((groups) => wordGroups = groups).catch(() => {}); if (studyWordsFor) listGroupWords(studyWordsFor).then((words) => studyWords = words).catch(() => {}); } }, 3000) : null;
     const todoRefresh = label === 'todos' ? window.setInterval(() => { listTodos().then((items) => todos = items).catch(() => {}); }, 3000) : null;
-    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion); }), listen<Todo>('todo-created', (event) => { todoNotice = event.payload; if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); todoNoticeTimer = window.setTimeout(() => { todoNotice = null; todoNoticeTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000); schedulePetHitTestLayout(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen<string>('pet-outfit-changed', (event) => { settings.pet_outfit=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen('tauri://focus', () => { if (label === 'pet-menu') getSettings().then((s) => settings=s).catch(() => {}); if (label === 'history') { historyExhausted = false; loadHistoryPage(true); } if (label === 'usage') loadUsageStats(); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
+    Promise.all([getSettings(), listMessages(), getRuntimeStatus(), listMicrophoneDevices(), getMousePassthrough(), listen<VoiceStatus>('voice-status', (event) => { voice = event.payload; }), listen<Message>('assistant-message', (event) => { messages.push(event.payload); busy = false; showBubble(true, event.payload.emotion, event.payload.quiz ? settings.study_quiz_ttl_seconds : undefined); }), listen<Todo>('todo-created', (event) => { todoNotice = event.payload; if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); todoNoticeTimer = window.setTimeout(() => { todoNotice = null; todoNoticeTimer = null; schedulePetHitTestLayout(); }, Math.max(1, bubbleDisplaySeconds) * 1000); schedulePetHitTestLayout(); }), listen<string>('voice-transcript', (event) => { messages.push({ id: crypto.randomUUID(), role: 'user', content: event.payload, trigger_type: 'user_voice', created_at: Date.now() }); busy = true; showBubble(false); }), listen<boolean>('mouse-passthrough-changed', (event) => { mousePassthrough=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen<boolean>('pet-hover-changed', (event) => { petHovered=event.payload; }), listen<number>('pet-image-size-preview', (event) => { petImageSize=event.payload; }), listen<'disabled' | 'continuous' | 'push_to_talk'>('voice-input-mode-changed', (event) => { voiceInputMode=event.payload; settings.voice_input_mode=event.payload; }), listen<boolean>('proactive-enabled-changed', (event) => { settings.proactive_enabled=event.payload; }), listen<boolean>('study-enabled-changed', (event) => { settings.study_enabled=event.payload; }), listen<string>('pet-outfit-changed', (event) => { settings.pet_outfit=event.payload; lastHitTestLayout=''; schedulePetHitTestLayout(); }), listen('tauri://focus', () => { if (label === 'pet-menu') { getSettings().then((s) => settings=s).catch(() => {}); resizeMenuWindow(); } if (label === 'history') { if (historyTab === 'study') loadStudyHistory(); else { historyExhausted = false; loadHistoryPage(true); } } if (label === 'usage') loadUsageStats(); }), listen<CapturedBinding>('shortcut-capture-preview', (event) => { pushToTalkLabel=event.payload.label; }), listen<CapturedBinding>('shortcut-captured', (event) => { pushToTalkTokens=event.payload.tokens; pushToTalkLabel=event.payload.label; capturingShortcut=false; shortcutCaptureCommittedAt=Date.now(); settings.push_to_talk_shortcut=JSON.stringify({ tokens: pushToTalkTokens, label: pushToTalkLabel }); localStorage.setItem('bubbleDisplaySeconds', String(Math.max(1, bubbleDisplaySeconds))); }), listen('mcp-servers-changed', () => { if (settingsTab === 'mcp') loadMcpServers(); })]).then(([s,m,r,devices,passthrough,...listeners]) => { settings=s; messages=m; runtime=r; microphones=devices; mousePassthrough=passthrough; voiceInputMode=s.voice_input_mode; if (s.push_to_talk_shortcut) { try { const binding = JSON.parse(s.push_to_talk_shortcut) as CapturedBinding; if (binding.tokens?.length) { pushToTalkTokens=binding.tokens; pushToTalkLabel=binding.label; } } catch {} } voice.state=r.microphone_status === 'listening' ? 'listening' : 'disabled'; unlisteners=listeners; setPushToTalkShortcut(voiceInputMode === 'push_to_talk' ? pushToTalkTokens : []).catch((e) => error=String(e)); }).catch((e) => error=String(e));
     if (label === 'todos') listTodos().then((items) => todos = items).catch((e) => error=String(e));
     if (label === 'history') loadHistoryPage(true);
     if (label === 'usage') loadUsageStats();
-    if (label === 'settings') loadToolHookSupport();
+    if (label === 'settings') { loadToolHookSupport(); loadWordGroups(); }
     return () => { window.removeEventListener('contextmenu', blockMenu); petResizeObserver?.disconnect(); if (runtimeRefresh !== null) window.clearInterval(runtimeRefresh); if (todoRefresh !== null) window.clearInterval(todoRefresh); unlisteners.forEach((unlisten) => unlisten()); if (bubbleTimer !== null) window.clearTimeout(bubbleTimer); if (todoNoticeTimer !== null) window.clearTimeout(todoNoticeTimer); menuResizeObserver?.disconnect(); };
   });
   async function submit() {
@@ -262,6 +343,7 @@
   }
   async function showPetMenu(event: MouseEvent) { event.preventDefault(); event.stopPropagation(); try { await openPetMenu(event.clientX,event.clientY); } catch(e) { error=String(e); } }
   async function toggleProactiveFromMenu() { error=''; try { const enabled=await toggleProactiveEnabled(); settings.proactive_enabled=enabled; } catch(e) { error=String(e); } }
+  async function toggleStudyFromMenu() { error=''; try { const enabled=await toggleStudyEnabled(); settings.study_enabled=enabled; } catch(e) { error=String(e); } }
   // 循环切换到下一套服装。先本地更新并广播事件让桌宠窗口立即换装，
   // 再调用后端只持久化 pet_outfit 字段（后端会再广播一次同值事件，幂等无副作用）。
   async function switchOutfit() {
@@ -314,6 +396,7 @@
     <div class="pet-menu" role="menu">
       <button onclick={cycleVoiceInputMode}><Mic size={15}/><span>语音输入</span><em>{voiceInputMode === 'disabled' ? '关' : voiceInputMode === 'continuous' ? '持续' : '按键'}</em></button>
       <button onclick={toggleProactiveFromMenu}><MessageCircle size={15}/><span>主动对话</span><em>{settings.proactive_enabled ? '开' : '关'}</em></button>
+      <button onclick={toggleStudyFromMenu}><BookOpenText size={15}/><span>日语学习</span><em>{settings.study_enabled ? '开' : '关'}</em></button>
       <!-- 切换衣服：服装素材就绪后取消注释即可启用（切换逻辑已保留）。
       <button onclick={switchOutfit}><Shirt size={15}/><span>切换衣服</span><em>{currentOutfit.name}</em></button>
       -->
@@ -332,6 +415,7 @@
       <button class:on={settingsTab === 'general'} onclick={() => settingsTab = 'general'}>常规</button>
       <button class:on={settingsTab === 'toolhook'} onclick={() => { settingsTab = 'toolhook'; loadToolHookSupport(); }}>编程联动</button>
       <button class:on={settingsTab === 'mcp'} onclick={() => { settingsTab = 'mcp'; loadMcpServers(); }}>MCP 服务</button>
+      <button class:on={settingsTab === 'study'} onclick={() => { settingsTab = 'study'; loadWordGroups(); }}>日语学习</button>
     </nav>
     {#if settingsTab === 'general'}
     <section><h2>角色</h2>
@@ -494,6 +578,75 @@
       {/if}
       <p class="note">本地 MCP 跟随应用启动，新增或修改后重启生效；远程 MCP（http 服务）即时连接生效。开关即时生效：只有已启用且已连接的服务器才会把工具注入 AI。</p>
     </section>
+    {:else if settingsTab === 'study'}
+    <section><h2>日语学习模式</h2>
+      <button class="option" class:on={settings.study_enabled} onclick={() => settings.study_enabled = !settings.study_enabled}>
+        <span><strong>启用日语学习模式</strong><small>{settings.study_enabled ? '洛琪希会结合启用的单词组与你互动、出题复习' : '已关闭（不注入任何学习内容）'}</small></span>
+      </button>
+      <button class="option" class:on={settings.study_isolated} onclick={() => settings.study_isolated = !settings.study_isolated} disabled={!settings.study_enabled}>
+        <span><strong>与主会话隔离</strong><small>{settings.study_isolated ? '学习模式下的对话使用独立会话，不影响日常聊天上下文' : '学习模式与日常聊天共享同一会话'}</small></span>
+      </button>
+      <p class="note">开启后，启用单词组的内容与掌握度会注入洛琪希的提示词，她会更倾向于考你掌握度低的单词。</p>
+    </section>
+    <section><h2>主动复习</h2>
+      <button class="option" class:on={settings.study_continuous_enabled} onclick={() => settings.study_continuous_enabled = !settings.study_continuous_enabled} disabled={!settings.study_enabled}>
+        <span><strong>持续出题模式</strong><small>{settings.study_continuous_enabled ? '答完一题立即出下一题，直到关闭' : '已关闭（使用下方间隔复习）'}</small></span>
+      </button>
+      <button class="option" class:on={settings.study_review_enabled} onclick={() => settings.study_review_enabled = !settings.study_review_enabled} disabled={!settings.study_enabled || settings.study_continuous_enabled}>
+        <span><strong>主动巩固复习</strong><small>{settings.study_continuous_enabled ? '持续出题模式下不生效' : settings.study_review_enabled ? '在随机间隔到达时主动出一道选择题考你' : '已关闭'}</small></span>
+      </button>
+      <div class="interval-grid">
+        <label>最短间隔（分钟）<input type="number" min="1" max="10080" bind:value={settings.study_review_min_minutes} disabled={!settings.study_enabled || !settings.study_review_enabled || settings.study_continuous_enabled} /></label>
+        <label>最长间隔（分钟）<input type="number" min="1" max="10080" bind:value={settings.study_review_max_minutes} disabled={!settings.study_enabled || !settings.study_review_enabled || settings.study_continuous_enabled} /></label>
+        <label>每日上限<input type="number" min="1" max="50" bind:value={settings.study_review_daily_limit} disabled={!settings.study_enabled || !settings.study_review_enabled || settings.study_continuous_enabled} /></label>
+      </div>
+      <label>答题气泡显示时间（秒）<input type="number" min="5" max="3600" bind:value={settings.study_quiz_ttl_seconds} disabled={!settings.study_enabled} /></label>
+      <p class="note">到点从启用的单词组选词出一道三选一选择题；上一题未作答时不重复出题；气泡消失后未作答的题视为放弃；应用重启后所有旧题一律过期；关闭应用期间不补发。修改后点底部「保存」生效。</p>
+      <div class="voice-modes">
+        {#each QUIZ_TYPE_OPTIONS as quizType (quizType.id)}
+          <label><input type="checkbox" checked={quizTypeOn(quizType.id)} disabled={!settings.study_enabled} onchange={() => toggleQuizType(quizType.id)} />{quizType.label}</label>
+        {/each}
+      </div>
+      <p class="note">勾选启用的题型（至少保留一种），洛琪希出题时会严格使用勾选的题型。</p>
+    </section>
+    <section><h2>单词组</h2>
+      {#if wordGroups.length === 0}
+        <p class="note">还没有单词组。把 xlsx 文件放入应用数据目录的 wordgroups 文件夹（首行表头：单词 / 平假名 / 中文意思，文件名即组名），然后点「重新导入」。</p>
+      {/if}
+      {#each wordGroups as group (group.id)}
+        {@const reviewed = group.word_count - group.unlearned}
+        <div class="tool-hook-item">
+          <div class="tool-hook-row">
+            <strong>{group.name}<span class="mcp-kind">{group.word_count} 词</span>{#if group.file_missing}<span class="status-badge error">文件缺失</span>{/if}</strong>
+            <span class="status-badge" class:configured={group.enabled}>{group.enabled ? '已启用' : '未启用'}</span>
+          </div>
+          <div class="mastery-bar" title={`已掌握 ${group.mastered} · 勉强记得 ${group.shaky} · 不记得 ${group.forgotten} · 未学 ${group.unlearned}`}>
+            <i class="m-mastered" style={`width:${group.word_count ? group.mastered / group.word_count * 100 : 0}%`}></i><i class="m-shaky" style={`width:${group.word_count ? group.shaky / group.word_count * 100 : 0}%`}></i><i class="m-forgotten" style={`width:${group.word_count ? group.forgotten / group.word_count * 100 : 0}%`}></i>
+          </div>
+          <p class="note">已掌握 {group.mastered} · 勉强 {group.shaky} · 不记得 {group.forgotten} · 未学 {group.unlearned}（{group.file_name}）</p>
+          <div class="tool-hook-actions">
+            <button type="button" class="test-button" onclick={() => chooseStudyGroup(group)} disabled={studyBusy || group.file_missing}>{group.enabled ? '取消启用' : '启用该组'}</button>
+            <button type="button" class="ghost-button" onclick={() => toggleStudyWords(group)}>{studyWordsFor === group.id ? '收起单词' : `查看单词（${group.word_count}）`}</button>
+          </div>
+          {#if studyWordsFor === group.id}
+            <div class="mcp-tools study-words">
+              {#if studyWords.length === 0}<p class="note">加载中或暂无单词。</p>{:else}
+                <table class="word-table">
+                  <thead><tr><th>单词</th><th>平假名</th><th>中文意思</th><th>掌握度</th><th>对/错</th></tr></thead>
+                  <tbody>
+                    {#each studyWords as item (item.id)}
+                      <tr><td>{item.word}</td><td>{item.kana}</td><td>{item.meaning}</td><td><select class="mastery-select m-{item.mastery}" value={item.mastery} disabled={studyBusy} onchange={(event) => changeWordMastery(item, event.currentTarget.value)}>{#each Object.entries(MASTERY_LABELS) as [key, label] (key)}<option value={key}>{label}</option>{/each}</select></td><td>{item.correct_count}/{item.wrong_count}</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/each}
+      <button type="button" class="test-button" onclick={reimportGroups} disabled={studyBusy}>{studyBusy ? '导入中…' : '重新导入 wordgroups 目录'}</button>
+      <p class="note">一次只能启用一组；启用状态即时生效，其余开关需点底部「保存」。</p>
+    </section>
     {:else}
     <section><h2>编程联动提醒</h2>
       <button class="option" class:on={settings.tool_hook_enabled} onclick={() => settings.tool_hook_enabled = !settings.tool_hook_enabled}>
@@ -562,8 +715,13 @@
   </main>
 {:else if label === 'history'}
   <main class="history-page">
-    <header><span>ROXYDESKTOPPET</span><h1>历史会话</h1><small>含主动消息与提醒</small></header>
+    <header><span>ROXYDESKTOPPET</span><h1>历史会话</h1><small>{historyTab === 'main' ? '含主动消息与提醒' : '学习模式会话与答题记录'}</small></header>
+    <nav class="settings-tabs history-tabs">
+      <button class:on={historyTab === 'main'} onclick={() => historyTab = 'main'}>主会话</button>
+      <button class:on={historyTab === 'study'} onclick={() => { historyTab = 'study'; loadStudyHistory(); }}>学习会话</button>
+    </nav>
     {#if error}<p class="error">{error}</p>{/if}
+    {#if historyTab === 'main'}
     <div class="history-list">
       {#if !historyExhausted && historyMessages.length > 0}
         <button class="ghost-button history-more" onclick={() => loadHistoryPage()} disabled={historyLoading}>{historyLoading ? '加载中…' : '加载更早的对话'}</button>
@@ -585,6 +743,44 @@
       {/each}
       {#if historyLoading && historyMessages.length > 0}<p class="history-hint">加载中…</p>{/if}
     </div>
+    {:else}
+    <div class="history-list">
+      <p class="usage-asr">答题统计：共 {studyHistory.quizzes.length} 题 · 已作答 {studyAnswered.length} 题 · 正确率 {studyCorrectRate}%</p>
+      {#if studyHistoryLoading}<p class="history-hint">加载中…</p>{/if}
+      {#if !studyHistoryLoading && studyTimeline.length === 0}
+        <div class="todo-empty"><MessageCircle size={30}/><strong>暂无学习记录</strong><span>在设置中开启日语学习模式并启用单词组后，复习题会记录在这里。</span></div>
+      {/if}
+      {#each studyTimeline as item, i (item.kind === 'quiz' ? item.quiz!.quiz_id : item.msg!.id)}
+        {@const prev = i > 0 ? studyTimeline[i - 1] : null}
+        {#if !prev || !sameDay(prev.ts, item.ts)}
+          <div class="history-day">{formatDay(item.ts)}</div>
+        {/if}
+        {#if item.kind === 'quiz' && item.quiz}
+          {@const quiz = item.quiz}
+          <div class="quiz-card">
+            <div class="quiz-card-head">
+              <strong>{quiz.question}</strong>
+              <span class="status-badge" class:configured={quiz.is_correct === true} class:error={quiz.is_correct === false}>{quiz.selected_index === null ? '未作答' : quiz.is_correct ? '答对了' : '答错了'}</span>
+            </div>
+            <div class="quiz-card-options">
+              {#each quiz.options as option, i}
+                <span class="quiz-card-option" class:correct={i === quiz.correct_index} class:wrong={quiz.selected_index === i && quiz.is_correct === false}>{option}{#if i === quiz.correct_index} ✓{:else if quiz.selected_index === i && quiz.is_correct === false} ✗ 你的选择{/if}</span>
+              {/each}
+            </div>
+            <p class="note">{quiz.word}（{quiz.kana}）— {quiz.meaning} · {formatTime(quiz.created_at)}{quiz.source === 'study_review' ? ' · 主动复习' : ''}</p>
+          </div>
+        {:else if item.msg}
+          {@const message = item.msg}
+          <div class="history-row" class:user={message.role === 'user'}>
+            <div class="history-bubble">
+              <p>{message.content}</p>
+              <time>{formatTime(message.created_at)}{#if message.role === 'user' && message.trigger_type === 'user_voice'} · 语音{:else if message.trigger_type === 'study_review'} · 主动复习{:else if message.trigger_type === 'study_feedback'} · 答题反馈{/if}</time>
+            </div>
+          </div>
+        {/if}
+      {/each}
+    </div>
+    {/if}
   </main>
 {:else if label === 'usage'}
   <main class="usage-page">
@@ -627,7 +823,8 @@
       <div class="todo-notice"><ListTodo size={13}/><span>已创建待办：{todoNotice.title} · {formatDue(todoNotice.due_at_utc)}{todoNotice.repeat_interval_minutes ? `（${formatRepeat(todoNotice.repeat_interval_minutes)}）` : ''}</span></div>
     {/if}
     {#if bubbleVisible || busy || error}
-      <div class="speech-bubble" ><p>{error || (busy ? '…………' : messages.at(-1)?.content || '我在这里。')}</p><button class="bubble-close" aria-label="关闭气泡" onclick={hideBubble}><X size={13} /></button></div>
+      {@const lastMessage = messages.at(-1)}
+      <div class="speech-bubble" ><p>{error || (busy ? '…………' : lastMessage?.content || '我在这里。')}</p>{#if !busy && !error && lastMessage?.quiz}{@const quiz = lastMessage.quiz}{@const answered = quizAnswers[quiz.quiz_id]}<div class="quiz-options">{#each quiz.options as option, i}<button class="quiz-option" class:chosen={!!answered && answered.correct < 0 && i === answered.selected} class:correct={!!answered && answered.correct >= 0 && i === answered.correct} class:wrong={!!answered && answered.correct >= 0 && i === answered.selected && i !== answered.correct} disabled={!!answered || quizBusy === quiz.quiz_id} onclick={() => answerCurrentQuiz(quiz.quiz_id, i)}>{option}</button>{/each}</div>{/if}<button class="bubble-close" aria-label="关闭气泡" onclick={hideBubble}><X size={13} /></button></div>
     {/if}
     <button class="pet" class:hovered={petHovered} style={`width:${172 * petDisplayScale}px;height:${198 * petDisplayScale}px`} aria-label="洛琪希，双击输入消息" ondblclick={openComposer} oncontextmenu={showPetMenu} data-tauri-drag-region><img src={petImageSrc} alt="洛琪希" draggable="false" /></button>
     {#if composerVisible}
@@ -786,4 +983,41 @@
   .mcp-form { display: grid; gap: 10px; margin-top: 10px; }
   .mcp-add { display: inline-flex; align-items: center; gap: 5px; }
   .mcp-json { min-height: 150px; font-family: Consolas, monospace; font-size: 12px; }
+  /* 日语学习：掌握度进度条与单词表 */
+  .mastery-bar { display: flex; height: 8px; margin-top: 8px; border-radius: 999px; overflow: hidden; background: #e9e0d3; }
+  .mastery-bar i { display: block; height: 100%; }
+  .mastery-bar .m-mastered { background: #6ca46f; }
+  .mastery-bar .m-shaky { background: #d9a94e; }
+  .mastery-bar .m-forgotten { background: #c45e50; }
+  .mastery-tag { padding: 2px 8px; border-radius: 999px; font-size: 10px; white-space: nowrap; }
+  .mastery-tag.m-mastered { color: #3c673c; background: #dfeadd; }
+  .mastery-tag.m-shaky { color: #9a6b1f; background: #f6e7cf; }
+  .mastery-tag.m-forgotten { color: #803b37; background: #f3dddd; }
+  .mastery-tag.m-unlearned { color: #6b5f53; background: #e6ded2; }
+  .mastery-select { width: auto; min-width: 92px; border: 1px solid #d3c6b8; border-radius: 999px; padding: 2px 6px; font-size: 10px; background: #e6ded2; color: #6b5f53; }
+  .mastery-select.m-mastered { color: #3c673c; background: #dfeadd; border-color: #b8d4b5; }
+  .mastery-select.m-shaky { color: #9a6b1f; background: #f6e7cf; border-color: #e3c493; }
+  .mastery-select.m-forgotten { color: #803b37; background: #f3dddd; border-color: #dfb5b2; }
+  .word-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .word-table th, .word-table td { padding: 5px 6px; border-bottom: 1px solid #e9dfd2; text-align: left; }
+  .word-table thead th { color: #81766b; font-size: 11px; font-weight: 600; }
+  .study-words { max-height: 320px; overflow-y: auto; }
+  /* 桌宠气泡内的选择题选项 */
+  .quiz-options { position: relative; z-index: 1; display: grid; gap: 6px; margin-top: 9px; padding-right: 16px; }
+  .quiz-option { border: 1px solid #d8cab9; border-radius: 9px; padding: 7px 10px; color: #433a32; background: #fffaf3; font-size: 12px; text-align: left; cursor: pointer; }
+  .quiz-option:hover:not(:disabled) { background: #f3e8da; }
+  .quiz-option:disabled { cursor: default; opacity: .75; }
+  .quiz-option.chosen { border-color: #9b6047; color: #8d482f; background: #f5e5d7; opacity: 1; }
+  .quiz-option.correct { border-color: #6ca46f; color: #38663c; background: #eef6ec; opacity: 1; }
+  .quiz-option.wrong { border-color: #c45e50; color: #803b37; background: #f9e9e7; opacity: 1; }
+  /* 历史页：学习标签与答题记录卡片 */
+  .history-tabs { margin: -10px 0 12px; }
+  .quiz-card { display: grid; gap: 8px; padding: 12px 13px; border: 1px solid #ded2c4; border-radius: 12px; background: #fffaf3; }
+  .quiz-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .quiz-card-head strong { font-size: 13px; line-height: 1.5; }
+  .quiz-card-options { display: grid; gap: 5px; }
+  .quiz-card-option { padding: 6px 10px; border: 1px solid #e4d9ca; border-radius: 8px; font-size: 12px; color: #5e554d; }
+  .quiz-card-option.correct { border-color: #6ca46f; color: #38663c; background: #eef6ec; }
+  .quiz-card-option.wrong { border-color: #c45e50; color: #803b37; background: #f9e9e7; }
+  .quiz-card .note { margin: 0; }
   .system-preview { white-space: pre-wrap; overflow-wrap: anywhere; }</style>

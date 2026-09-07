@@ -60,6 +60,25 @@ export interface AppSettings {
   search_api_configured: boolean;
   agent_max_tool_rounds: number;
   autostart_enabled: boolean;
+  study_enabled: boolean;
+  study_isolated: boolean;
+  study_review_enabled: boolean;
+  study_review_min_minutes: number;
+  study_review_max_minutes: number;
+  study_review_daily_limit: number;
+  /** 启用的题型，逗号分隔：meaning 给日文单词选中文 / spelling 给中文选日文单词 / reading 给单词选平假名 */
+  study_quiz_types: string;
+  /** 持续出题模式：答完立即出下一题，与主动巩固复习互斥 */
+  study_continuous_enabled: boolean;
+  /** 答题气泡显示时间（秒）：超时气泡消失后该题视为放弃 */
+  study_quiz_ttl_seconds: number;
+}
+
+/** 发给前端的选择题视图：不含 correct_index，答案以后端 quiz_records 为准 */
+export interface QuizView {
+  quiz_id: string;
+  question: string;
+  options: string[];
 }
 
 export interface Message {
@@ -70,6 +89,62 @@ export interface Message {
   emotion?: string | null;
   trigger_type: string;
   created_at: number;
+  quiz?: QuizView | null;
+}
+
+/** 单词组概览（含掌握度统计），mastery 四档计数由后端派生 */
+export interface WordGroup {
+  id: string;
+  name: string;
+  file_name: string;
+  enabled: boolean;
+  word_count: number;
+  mastered: number;
+  shaky: number;
+  forgotten: number;
+  unlearned: number;
+  file_missing: boolean;
+}
+
+export interface WordItem {
+  id: number;
+  word: string;
+  kana: string;
+  meaning: string;
+  /** 后端派生的掌握度键：mastered 已掌握 / shaky 勉强记得 / forgotten 不记得 / unlearned 未学 */
+  mastery: 'mastered' | 'shaky' | 'forgotten' | 'unlearned';
+  correct_count: number;
+  wrong_count: number;
+}
+
+/** 作答结果：already 表示之前已答过，expired 表示题目不存在或已失效 */
+export interface QuizAnswerResult {
+  status: 'ok' | 'already' | 'expired';
+  correct_index?: number;
+  selected_index?: number;
+  is_correct?: boolean;
+}
+
+/** 学习历史中的一道题记录（含用户选择与单词本体，供回顾） */
+export interface QuizRecord {
+  quiz_id: string;
+  quiz_type: 'meaning' | 'spelling' | 'reading';
+  question: string;
+  options: string[];
+  correct_index: number;
+  selected_index: number | null;
+  is_correct: boolean | null;
+  word: string;
+  kana: string;
+  meaning: string;
+  source: 'chat' | 'study_review';
+  created_at: number;
+  answered_at: number | null;
+}
+
+export interface StudyHistory {
+  messages: Message[];
+  quizzes: QuizRecord[];
 }
 
 export interface RuntimeStatus {

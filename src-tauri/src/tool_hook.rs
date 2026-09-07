@@ -260,6 +260,8 @@ fn fixed_message(settings: &AppSettings, event: &HookEvent) -> Message {
         emotion: Some("calm".into()),
         trigger_type: "tool_hook".into(),
         created_at: chrono::Utc::now().timestamp_millis(),
+        session: "main".into(),
+        quiz: None,
     }
 }
 

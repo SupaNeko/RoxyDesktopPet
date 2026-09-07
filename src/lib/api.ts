@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, HardwareStats, McpServerRequest, McpServerStatus, McpToolInfo, Message, NowPlaying, RuntimeStatus, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, UsageSummary, VitsModelInfo } from './types';
+import type { AppSettings, HardwareStats, McpServerRequest, McpServerStatus, McpToolInfo, Message, NowPlaying, QuizAnswerResult, QuizRecord, RuntimeStatus, StudyHistory, TaskbarApp, Todo, ToolHookStatus, ToolHookToolInfo, UsageSummary, VitsModelInfo, WordGroup, WordItem } from './types';
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -27,7 +27,16 @@ const demoSettings: AppSettings = {
   voice_input_mode: 'disabled', push_to_talk_shortcut: '', pet_show_on_fullscreen: true, pet_outfit: 'default',
   search_provider: '', search_api_key: '', search_base_url: '', search_api_configured: false,
   agent_max_tool_rounds: 30,
-  autostart_enabled: false
+  autostart_enabled: false,
+  study_enabled: false,
+  study_isolated: true,
+  study_review_enabled: true,
+  study_review_min_minutes: 30,
+  study_review_max_minutes: 90,
+  study_review_daily_limit: 8,
+  study_quiz_types: 'meaning,spelling,reading',
+  study_continuous_enabled: false,
+  study_quiz_ttl_seconds: 60
 };
 
 export async function getSettings(): Promise<AppSettings> {
@@ -83,6 +92,7 @@ const demoUsageStats: UsageSummary[] = [
 export async function getUsageStats(): Promise<UsageSummary[]> { return inTauri() ? invoke('get_usage_stats') : demoUsageStats; }
 export async function openPetMenu(x: number, y: number): Promise<void> { if (inTauri()) await invoke('show_pet_menu', { x, y }); }
 export async function toggleProactiveEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_proactive_enabled') : true; }
+export async function toggleStudyEnabled(): Promise<boolean> { return inTauri() ? invoke('toggle_study_enabled') : true; }
 export async function setPetOutfit(outfit: string): Promise<string> { return inTauri() ? invoke('set_pet_outfit', { outfit }) : outfit; }
 
 export async function setMousePassthrough(enabled: boolean): Promise<void> { if (inTauri()) await invoke('set_mouse_passthrough', { enabled }); }
@@ -121,3 +131,24 @@ export async function listMcpServerTools(id: number): Promise<McpToolInfo[]> { r
 export async function getTaskbarApps(): Promise<TaskbarApp[]> { return inTauri() ? invoke('get_taskbar_apps') : []; }
 export async function getHardwareStats(): Promise<HardwareStats> { return inTauri() ? invoke('get_hardware_stats') : { cpu_usage_percent: 0, memory_used_mb: 0, memory_total_mb: 0, gpu_name: null, gpu_usage_percent: null, gpu_memory_used_mb: null, gpu_memory_total_mb: null, gpu_temperature_celsius: null }; }
 export async function getNowPlaying(): Promise<NowPlaying | null> { return inTauri() ? invoke('get_now_playing') : null; }
+
+// ---- 日语学习模式 ----
+const demoWordGroups: WordGroup[] = [
+  { id: 'demo-n5', name: 'N5-样例', file_name: 'N5-样例.xlsx', enabled: true, word_count: 10, mastered: 2, shaky: 3, forgotten: 1, unlearned: 4, file_missing: false },
+];
+const demoWords: WordItem[] = [
+  { id: 1, word: '勉強', kana: 'べんきょう', meaning: '学习', mastery: 'mastered', correct_count: 3, wrong_count: 0 },
+  { id: 2, word: '図書館', kana: 'としょかん', meaning: '图书馆', mastery: 'shaky', correct_count: 1, wrong_count: 1 },
+  { id: 3, word: '約束', kana: 'やくそく', meaning: '约定', mastery: 'forgotten', correct_count: 0, wrong_count: 2 },
+];
+export async function listWordGroups(): Promise<WordGroup[]> { return inTauri() ? invoke('list_word_groups') : demoWordGroups; }
+export async function listGroupWords(groupId: string): Promise<WordItem[]> { return inTauri() ? invoke('list_group_words', { groupId }) : demoWords; }
+export async function setStudyGroup(groupId: string | null): Promise<void> { if (inTauri()) await invoke('set_study_group', { groupId }); }
+export async function setWordMastery(wordId: number, mastery: string): Promise<WordItem | null> { return inTauri() ? invoke('set_word_mastery', { wordId, mastery }) : null; }
+export async function reimportWordGroups(): Promise<WordGroup[]> { return inTauri() ? invoke('reimport_word_groups') : demoWordGroups; }
+export async function answerQuiz(quizId: string, selectedIndex: number): Promise<QuizAnswerResult> {
+  if (!inTauri()) return { status: 'ok', correct_index: 0, selected_index: selectedIndex, is_correct: selectedIndex === 0 };
+  return invoke('answer_quiz', { quizId, selectedIndex });
+}
+const demoStudyHistory: StudyHistory = { messages: [], quizzes: [] };
+export async function listStudyHistory(): Promise<StudyHistory> { return inTauri() ? invoke('list_study_history') : demoStudyHistory; }
