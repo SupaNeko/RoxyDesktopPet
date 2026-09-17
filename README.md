@@ -53,6 +53,32 @@ XFYUN_ASR_API_SECRET=
 
 缺少扩展包、显卡不受支持或扩展校验失败时，桌宠保持纯文本回复。
 
+#### 语音服务常见问题
+
+**1. Hyper-V 端口预留冲突（语音服务拉不起来）**
+
+GPT-SoVITS 推理服务固定监听本机 `127.0.0.1:9880`。启用 Hyper-V、WSL2 或 Docker Desktop 后，Windows 会动态预留大段 TCP 端口，9880 可能正好落入预留范围，导致服务无法绑定端口、桌宠一直显示“启动中”。
+
+排查（无需管理员）：
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+如果输出中包含 `9880`，说明端口被 Hyper-V 预留。解决方法（管理员 PowerShell）：
+
+```powershell
+net stop winnat
+netsh int ipv4 add excludedportrange protocol=tcp startport=9880 numberofports=1
+net start winnat
+```
+
+该命令将 9880 永久排除在动态预留范围之外，重启后依然有效。若 `net stop winnat` 提示服务未启动，说明预留已随 winnat 停止而释放，直接执行中间的 `add excludedportrange` 命令固定端口即可。
+
+**2. 系统代理拦截本机语音请求（状态卡“启动中”、测试无声音）**
+
+开启 Clash 等系统代理时，旧版本桌宠发往 `127.0.0.1:9880` 的健康检查与合成请求可能被代理拦截并返回 502，表现为服务进程正常但桌宠一直显示“启动中”、设置页测试没有声音。当前版本已对本机回环请求强制绕过代理；使用旧版本时可临时关闭系统代理恢复语音。日志中如出现 `GPT-SoVITS 返回 502 Bad Gateway` 即为此问题。
+
 ### 长期记忆
 
 长期记忆由观察者独占维护。记忆文本和 embedding 向量保存在桌宠自己的 SQLite 数据库中，召回时由 Rust 在进程内完成语义相似度、词面相关度和排序计算：

@@ -140,7 +140,10 @@ fn nvidia_gpu() -> Result<String, String> {
 }
 
 async fn health_available() -> bool {
+    // 本机回环健康检查必须绕过系统代理，否则 Clash 等代理会拦截请求并返回 502，
+    // 导致服务明明已就绪却被误判为“启动中”。
     let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_millis(800))
         .build()
     else {

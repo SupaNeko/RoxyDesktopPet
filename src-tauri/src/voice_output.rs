@@ -430,7 +430,13 @@ async fn gpt_sovits_tts(
         .file_stem()
         .and_then(|v| v.to_str())
         .ok_or("参考音频文件名不是有效日语文本")?;
-    let response = reqwest::Client::new().post("http://127.0.0.1:9880/tts").json(&serde_json::json!({
+    // 本机回环地址必须绕过系统代理：Windows 代理例外列表的通配符（如 127.*）
+    // reqwest 解析不完整，Clash 等代理会拦截 127.0.0.1:9880 并返回 502。
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("GPT-SoVITS 客户端初始化失败：{e}"))?;
+    let response = client.post("http://127.0.0.1:9880/tts").json(&serde_json::json!({
         "text":text,"text_lang":"ja","ref_audio_path":reference.to_string_lossy(),"prompt_text":prompt,"prompt_lang":"ja",
         "text_split_method":"cut5","batch_size":1,"media_type":"wav","streaming_mode":2,"top_k":15,"top_p":1.0,"temperature":1.0,"speed_factor":1.0
     })).send().await.map_err(|e|format!("GPT-SoVITS 请求失败：{e}"))?;
