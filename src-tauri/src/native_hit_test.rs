@@ -248,6 +248,36 @@ pub fn update_mouse_position(app: &AppHandle, screen_x: i32, screen_y: i32) {
 #[cfg(not(windows))]
 pub fn update_mouse_position(_: &AppHandle, _: i32, _: i32) {}
 
+/// 判断屏幕坐标是否命中桌宠像素或可交互区域。
+/// 供穿透模式下的全局右键菜单做位置过滤，避免全屏任意位置右键都弹菜单。
+/// 与 update_mouse_position 不同，这里不受 passthrough 状态影响，只做纯坐标判断。
+#[cfg(windows)]
+pub fn screen_point_hits_pet(app: &AppHandle, screen_x: i32, screen_y: i32) -> bool {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ScreenToClient};
+    let Some(window) = app.get_webview_window("pet") else {
+        return false;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let mut point = POINT {
+        x: screen_x,
+        y: screen_y,
+    };
+    if unsafe { ScreenToClient(hwnd.0 as _, &mut point) } == 0 {
+        return false;
+    }
+    match app.state::<PetHitTestState>().0.read() {
+        Ok(layout) => layout.accepts_pointer(point.x as f64, point.y as f64),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(windows))]
+pub fn screen_point_hits_pet(_: &AppHandle, _: i32, _: i32) -> bool {
+    false
+}
+
 /// No window subclassing is needed: the global input hook drives hit testing.
 pub fn install(_: &tauri::WebviewWindow, _: PetHitTestState) -> Result<(), String> {
     Ok(())

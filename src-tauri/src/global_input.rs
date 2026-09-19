@@ -47,12 +47,17 @@ static HOOK_SENDER: OnceLock<Sender<InputEvent>> = OnceLock::new();
 static HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 fn send_event(vk: u16, down: bool) {
+    send_event_at(vk, down, None);
+}
+
+/// mouse_position 为鼠标事件的屏幕坐标；键盘事件为 None。
+fn send_event_at(vk: u16, down: bool, mouse_position: Option<(i32, i32)>) {
     // 过滤左右不分的通用修饰键，与绑定/捕获逻辑保持一致
     if matches!(vk, 0x10 | 0x11 | 0x12) {
         return;
     }
     if let Some(sender) = HOOK_SENDER.get() {
-        let _ = sender.send(InputEvent { vk, down, mouse_position: None });
+        let _ = sender.send(InputEvent { vk, down, mouse_position });
     }
 }
 
@@ -230,14 +235,14 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
             WM_MBUTTONDOWN => Some((0x04u16, true)),
             WM_MBUTTONUP => Some((0x04u16, false)),
             WM_XBUTTONDOWN | WM_XBUTTONUP => {
-                let info = &*(lparam as *const MSLLHOOKSTRUCT);
                 let xbutton = (info.mouseData >> 16) & 0xFFFF;
                 Some((if xbutton == 1 { 0x05u16 } else { 0x06u16 }, msg == WM_XBUTTONDOWN))
             }
             _ => None,
         };
         if let Some((vk, down)) = event {
-            send_event(vk, down);
+            // 按钮事件同样携带屏幕坐标，供穿透模式下的右键菜单做位置过滤
+            send_event_at(vk, down, Some((info.pt.x, info.pt.y)));
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -258,8 +263,12 @@ pub fn start_listener(app: AppHandle) {
 fn consume_events(app: AppHandle, rx: Receiver<InputEvent>) {
     let mut pressed: HashSet<u16> = HashSet::new();
     while let Ok(event) = rx.recv() {
-        if let Some((x, y)) = event.mouse_position {
-            crate::native_hit_test::update_mouse_position(&app, x, y);
+        // vk == 0 是鼠标移动事件（见 send_mouse_move），只用于命中测试；
+        // 按钮事件现在也带坐标，必须靠 vk 区分，否则会误吞按钮事件。
+        if event.vk == 0 {
+            if let Some((x, y)) = event.mouse_position {
+                crate::native_hit_test::update_mouse_position(&app, x, y);
+            }
             continue;
         }
         if event.down {
@@ -269,12 +278,16 @@ fn consume_events(app: AppHandle, rx: Receiver<InputEvent>) {
         }
 
         // 鼠标穿透开启时，桌宠窗口收不到自身右键，需要全局右键弹原生菜单。
+        // 只有光标落在桌宠像素/可交互区域内才弹菜单，否则全屏任意位置右键都会触发。
         // 弹窗/菜单必须走主线程，不能在 raw 线程直接调用。
         if event.down
             && event.vk == 0x02
             && app
                 .state::<crate::pet_interaction::PetInteractionState>()
                 .enabled()
+            && event.mouse_position.is_some_and(|(x, y)| {
+                crate::native_hit_test::screen_point_hits_pet(&app, x, y)
+            })
         {
             let menu_app = app.clone();
             let _ = app.run_on_main_thread(move || {
