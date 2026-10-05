@@ -270,6 +270,33 @@ fn save_pet_window_position(window: &tauri::WebviewWindow, position: tauri::Phys
         let _ = std::fs::write(path, json);
     }
 }
+
+/// 将桌宠窗口重置到主显示器工作区右下角并持久化，
+/// 用于显示器调整后保存的坐标越界、桌宠被移出屏幕且无法拖回的场景。
+fn reset_pet_window_position(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("pet") else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let position = match window.primary_monitor().ok().flatten() {
+        Some(monitor) => {
+            let area = monitor.work_area();
+            let margin = 24i32;
+            tauri::PhysicalPosition::new(
+                area.position.x + area.size.width as i32 - size.width as i32 - margin,
+                area.position.y + area.size.height as i32 - size.height as i32 - margin,
+            )
+        }
+        None => tauri::PhysicalPosition::new(100, 100),
+    };
+    expect_programmatic_pet_move(position);
+    if window.set_position(position).is_ok() {
+        save_pet_window_position(&window, position);
+        let _ = window.show();
+    }
+}
 pub fn run() {
     crate::logger::init();
     // 数据库文件名已从 chatpet.db 更名为 roxydesktoppet.db；旧文件存在且新文件不存在时自动迁移，保留历史数据。
@@ -504,8 +531,13 @@ pub fn run() {
             let toggle = MenuItem::with_id(app, "toggle", "显示/隐藏桌宠", true, None::<&str>)?;
             let passthrough =
                 MenuItem::with_id(app, "passthrough", "切换鼠标穿透", true, None::<&str>)?;
+            let reset_position =
+                MenuItem::with_id(app, "reset_position", "重置桌宠位置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&settings, &history, &toggle, &passthrough, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&settings, &history, &toggle, &passthrough, &reset_position, &quit],
+            )?;
             let tray_icon = app.default_window_icon().cloned();
             let mut tray_builder = TrayIconBuilder::new();
             if let Some(icon) = tray_icon {
@@ -539,6 +571,9 @@ pub fn run() {
                     }
                     "passthrough" => {
                         let _ = pet_interaction::toggle(app);
+                    }
+                    "reset_position" => {
+                        reset_pet_window_position(app);
                     }
                     "quit" => {
                         let handle = app.clone();
